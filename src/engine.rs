@@ -372,6 +372,7 @@ mod tests {
 
 /// Reject suspicious archive member names *before* asking the external extractor to write files.
 /// Defense in depth only: archive metadata/link handling also needs OS-level integration tests.
+#[allow(dead_code)]
 pub fn member_path_looks_safe(name: &str) -> bool {
     use std::path::Component;
     let text = name.replace('\\', "/");

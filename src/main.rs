@@ -4,7 +4,7 @@ mod i18n;
 use i18n::Language;
 mod engine;
 mod winicon;
-use engine::{CompressionSettings, RunOutcome, create_arguments, create_arguments_for_format, delete_file_with_retry, run_7z, run_7z_cancellable_with_progress, member_path_looks_safe};
+use engine::{CompressionSettings, RunOutcome, create_arguments, create_arguments_for_format, delete_file_with_retry, run_7z, run_7z_cancellable_with_progress};
 use slint::{Model, ModelRc, VecModel, Timer, TimerMode};
 use std::{cell::RefCell, fs, path::{Path, PathBuf}, rc::Rc, sync::{mpsc, Arc, Mutex, atomic::{AtomicBool, AtomicU8, Ordering}}, thread, time::{Duration, Instant}};
 
@@ -32,21 +32,28 @@ fn center_window(_window: &slint::Window) {}
 slint::slint! {
     import { Button, LineEdit, CheckBox, ComboBox, VerticalBox, HorizontalBox } from "std-widgets.slint";
 
-    export component CompressionWindow inherits Window {
+    export component ProgressWindow inherits Window {
         title: "Mickey RAR";
         icon: @image-url("../assets/icon-window.png");
         width: 390px;
         height: 132px;
         background: #202522;
         in-out property <float> progress: 0.0;
-        in-out property <string> message: "Compressing files...";
+        in-out property <string> message: "Processing...";
+        in-out property <bool> rtl: false;
         Rectangle { x: 18px; y: 18px; width: 34px; height: 34px; border-radius: 7px; background: #a7d63f;
             Image { source: @image-url("../assets/icon.png"); width: 34px; height: 34px; image-fit: contain; }
         }
         Text { x: 64px; y: 19px; text: "Mickey RAR"; color: #f3f7f1; font-size: 18px; font-weight: 700; }
         Text { x: 64px; y: 46px; text: root.message; color: #b7c5b5; font-size: 11px; }
         Rectangle { x: 18px; y: 94px; width: parent.width - 36px; height: 8px; border-radius: 4px; background: #343b36;
-            Rectangle { x: parent.width - root.progress * parent.width; width: root.progress * parent.width; height: parent.height; border-radius: 4px; background: #a7d63f; }
+            Rectangle {
+                x: root.rtl ? (parent.width - root.progress * parent.width) : 0px;
+                width: root.progress * parent.width;
+                height: parent.height;
+                border-radius: 4px;
+                background: #a7d63f;
+            }
         }
     }
 
@@ -80,6 +87,8 @@ slint::slint! {
     }
 }
 
+type CompressionWindow = ProgressWindow;
+
 #[derive(Default)]
 struct AppState {
     folder: PathBuf,
@@ -107,64 +116,164 @@ fn context_operation() -> Option<String> {
     ))
 }
 
-fn run_context_extract_here(paths: Vec<PathBuf>, _arabic: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_context_extraction_with_options(
+    paths: Vec<PathBuf>,
+    target_dir: Option<PathBuf>,
+    extract_to_subfolder: bool,
+    arabic: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     if paths.is_empty() { return Err("No archive selected".into()); }
-    for archive in &paths {
-        if !archive.exists() { continue; }
-        let dest = archive.parent().unwrap_or_else(|| Path::new("."));
-        let mut output_option = std::ffi::OsString::from("-o");
-        output_option.push(dest.as_os_str());
-        let args = vec![
-            std::ffi::OsString::from("x"),
-            std::ffi::OsString::from("-y"),
-            std::ffi::OsString::from("-aos"),
-            output_option,
-            archive.as_os_str().to_owned(),
-        ];
-        run_7z(&args, None).map_err(|e| format!("Extraction error: {e}"))?;
-    }
-    Ok(())
-}
+    let archives: Vec<PathBuf> = paths.into_iter().filter(|p| p.is_file()).collect();
+    if archives.is_empty() { return Err("Selected file does not exist".into()); }
 
-fn run_context_extract_to_folder(paths: Vec<PathBuf>, _arabic: bool) -> Result<(), Box<dyn std::error::Error>> {
-    if paths.is_empty() { return Err("No archive selected".into()); }
-    for archive in &paths {
-        if !archive.exists() { continue; }
-        let parent = archive.parent().unwrap_or_else(|| Path::new("."));
-        let stem = archive.file_stem().unwrap_or_default().to_string_lossy();
-        let dest = parent.join(stem.as_ref());
-        let _ = std::fs::create_dir_all(&dest);
-        let mut output_option = std::ffi::OsString::from("-o");
-        output_option.push(dest.as_os_str());
-        let args = vec![
-            std::ffi::OsString::from("x"),
-            std::ffi::OsString::from("-y"),
-            std::ffi::OsString::from("-aos"),
-            output_option,
-            archive.as_os_str().to_owned(),
-        ];
-        run_7z(&args, None).map_err(|e| format!("Extraction error: {e}"))?;
-    }
-    Ok(())
-}
+    let ui = ProgressWindow::new()?;
+    quit_process_on_close(&ui.window());
+    ui.set_rtl(arabic);
 
-fn run_context_extract_to(paths: Vec<PathBuf>, _arabic: bool) -> Result<(), Box<dyn std::error::Error>> {
-    if paths.is_empty() { return Err("No archive selected".into()); }
-    let default_folder = paths[0].parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
-    if let Some(dest) = rfd::FileDialog::new().set_directory(&default_folder).pick_folder() {
-        for archive in &paths {
-            if !archive.exists() { continue; }
-            let mut output_option = std::ffi::OsString::from("-o");
-            output_option.push(dest.as_os_str());
+    let center_timer = Timer::default();
+    let center_weak = ui.as_weak();
+    center_timer.start(TimerMode::SingleShot, Duration::from_millis(120), move || {
+        if let Some(ui) = center_weak.upgrade() { center_window(&ui.window()); }
+        winicon::install();
+    });
+
+    let first_name = archives[0].file_name().unwrap_or_default().to_string_lossy();
+    ui.set_message(if arabic { format!("جاري فك ضغط {first_name}...").into() } else { format!("Extracting {first_name}...").into() });
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let progress_handle = Arc::new(AtomicU8::new(0));
+    let worker_cancelled = cancelled.clone();
+    let worker_progress = progress_handle.clone();
+    let worker_done = Arc::new(AtomicBool::new(false));
+    let worker_finished = worker_done.clone();
+    let (sender, receiver) = mpsc::channel();
+
+    let archives_worker = archives.clone();
+    let worker = thread::spawn(move || {
+        for archive in archives_worker {
+            if worker_cancelled.load(Ordering::Relaxed) { break; }
+            let abs_archive = if archive.is_absolute() { archive } else {
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(&archive)
+            };
+            let dest = if let Some(ref t) = target_dir {
+                t.clone()
+            } else if extract_to_subfolder {
+                let parent = abs_archive.parent().unwrap_or_else(|| Path::new("."));
+                let stem = abs_archive.file_stem().unwrap_or_default().to_string_lossy();
+                parent.join(stem.as_ref())
+            } else {
+                abs_archive.parent().unwrap_or_else(|| Path::new(".")).to_path_buf()
+            };
+            let _ = std::fs::create_dir_all(&dest);
+            let dest_str = dest.to_string_lossy();
+            let clean_dest = dest_str.trim_end_matches(['\\', '/']);
+            let mut output_arg = std::ffi::OsString::from("-o");
+            output_arg.push(clean_dest);
+
             let args = vec![
                 std::ffi::OsString::from("x"),
                 std::ffi::OsString::from("-y"),
-                std::ffi::OsString::from("-aos"),
-                output_option,
-                archive.as_os_str().to_owned(),
+                std::ffi::OsString::from("-aoa"),
+                output_arg,
+                abs_archive.as_os_str().to_owned(),
             ];
-            run_7z(&args, None).map_err(|e| format!("Extraction error: {e}"))?;
+            let res = run_7z_cancellable_with_progress(&args, None, &worker_cancelled, Some(&worker_progress));
+            if let Err(e) = res {
+                worker_finished.store(true, Ordering::SeqCst);
+                let _ = sender.send(Err(e));
+                return;
+            }
+            if worker_cancelled.load(Ordering::Relaxed) {
+                worker_finished.store(true, Ordering::SeqCst);
+                let _ = sender.send(Ok(RunOutcome::Cancelled));
+                return;
+            }
         }
+        worker_progress.store(100, Ordering::Relaxed);
+        worker_finished.store(true, Ordering::SeqCst);
+        let _ = sender.send(Ok(RunOutcome::Finished));
+    });
+
+    let close_cancelled = cancelled.clone();
+    let close_done = worker_done.clone();
+    ui.window().on_close_requested(move || {
+        close_cancelled.store(true, Ordering::SeqCst);
+        let done = close_done.clone();
+        thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !done.load(Ordering::SeqCst) && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(20));
+            }
+            std::process::exit(0);
+        });
+        slint::CloseRequestResponse::HideWindow
+    });
+
+    let weak = ui.as_weak();
+    let timer_receiver = Arc::new(Mutex::new(receiver));
+    let timer_progress = progress_handle.clone();
+    let timer = Timer::default();
+    let mut shown_percent = u8::MAX;
+
+    timer.start(TimerMode::Repeated, Duration::from_millis(80), move || {
+        if let Some(ui) = weak.upgrade() {
+            let percent = timer_progress.load(Ordering::Relaxed);
+            ui.set_progress(percent as f32 / 100.0);
+            if percent != shown_percent {
+                shown_percent = percent;
+                let text = if percent == 0 {
+                    if arabic { "جاري فك الضغط...".to_string() } else { "Extracting files...".to_string() }
+                } else if arabic {
+                    format!("جاري فك الضغط... {percent}%")
+                } else {
+                    format!("Extracting files... {percent}%")
+                };
+                ui.set_message(text.into());
+            }
+
+            if let Ok(result) = timer_receiver.lock().unwrap().try_recv() {
+                match result {
+                    Ok(RunOutcome::Finished) => {
+                        ui.set_progress(1.0);
+                        ui.set_message(if arabic { "تم فك الضغط بنجاح".into() } else { "Extraction completed successfully".into() });
+                    }
+                    Ok(RunOutcome::Cancelled) => {
+                        ui.set_message(if arabic { "تم إلغاء فك الضغط".into() } else { "Extraction cancelled".into() });
+                    }
+                    Err(error) => {
+                        ui.set_message(format!("Error: {error}").into());
+                    }
+                }
+                let close_timer = Timer::default();
+                close_timer.start(TimerMode::SingleShot, Duration::from_millis(400), move || {
+                    let _ = slint::quit_event_loop();
+                });
+            }
+        }
+    });
+
+    ui.run()?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !worker.is_finished() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    drop(timer);
+    Ok(())
+}
+
+fn run_context_extract_here(paths: Vec<PathBuf>, arabic: bool) -> Result<(), Box<dyn std::error::Error>> {
+    run_context_extraction_with_options(paths, None, false, arabic)
+}
+
+fn run_context_extract_to_folder(paths: Vec<PathBuf>, arabic: bool) -> Result<(), Box<dyn std::error::Error>> {
+    run_context_extraction_with_options(paths, None, true, arabic)
+}
+
+fn run_context_extract_to(paths: Vec<PathBuf>, arabic: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if paths.is_empty() { return Err("No archive selected".into()); }
+    let default_folder = paths[0].parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    if let Some(dest) = rfd::FileDialog::new().set_directory(&default_folder).pick_folder() {
+        run_context_extraction_with_options(paths, Some(dest), false, arabic)?;
     }
     Ok(())
 }
@@ -543,6 +652,7 @@ fn show_folder(ui: &MainWindow, state: &Rc<RefCell<AppState>>) -> Result<(), Str
     Ok(())
 }
 
+#[allow(dead_code)]
 fn list_member_names(archive: &Path) -> Result<Vec<String>, String> {
     let out = run_text_args(&["l".as_ref(), "-slt".as_ref(), archive.as_os_str()])?;
     let mut in_contents = false;
@@ -883,6 +993,135 @@ fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
     Ok(None)
 }
 
+fn run_in_app_extraction(
+    archive: PathBuf,
+    dest: PathBuf,
+    selected_files: Vec<String>,
+    arabic: bool,
+    main_ui: slint::Weak<MainWindow>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let progress_ui = ProgressWindow::new()?;
+    progress_ui.set_rtl(arabic);
+    let name = archive.file_name().unwrap_or_default().to_string_lossy();
+    progress_ui.set_message(if arabic {
+        format!("جاري فك ضغط {name}...").into()
+    } else {
+        format!("Extracting {name}...").into()
+    });
+    progress_ui.set_progress(0.0);
+    center_window(&progress_ui.window());
+    progress_ui.show()?;
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let progress_handle = Arc::new(AtomicU8::new(0));
+    let worker_cancelled = cancelled.clone();
+    let worker_progress = progress_handle.clone();
+    let worker_done = Arc::new(AtomicBool::new(false));
+    let (sender, receiver) = mpsc::channel();
+
+    let dest_clone = dest.clone();
+    let archive_clone = archive.clone();
+    let selected_clone = selected_files.clone();
+    let worker_finished = worker_done.clone();
+
+    thread::spawn(move || {
+        let _ = std::fs::create_dir_all(&dest_clone);
+        let dest_str = dest_clone.to_string_lossy();
+        let clean_dest = dest_str.trim_end_matches(['\\', '/']);
+        let mut output_arg = std::ffi::OsString::from("-o");
+        output_arg.push(clean_dest);
+
+        let mut args = vec![
+            std::ffi::OsString::from("x"),
+            std::ffi::OsString::from("-y"),
+            std::ffi::OsString::from("-aoa"),
+            output_arg,
+            archive_clone.as_os_str().to_owned(),
+        ];
+        for f in selected_clone {
+            args.push(std::ffi::OsString::from(f));
+        }
+
+        let res = run_7z_cancellable_with_progress(&args, None, &worker_cancelled, Some(&worker_progress));
+        worker_progress.store(100, Ordering::Relaxed);
+        worker_finished.store(true, Ordering::SeqCst);
+        let _ = sender.send(res);
+    });
+
+    let close_cancelled = cancelled.clone();
+    let p_weak = progress_ui.as_weak();
+    progress_ui.window().on_close_requested(move || {
+        close_cancelled.store(true, Ordering::SeqCst);
+        slint::CloseRequestResponse::HideWindow
+    });
+
+    let timer = Rc::new(RefCell::new(None));
+    let timer_progress = progress_handle.clone();
+    let timer_receiver = Arc::new(Mutex::new(receiver));
+    let mut shown_percent = u8::MAX;
+    let timer_self = timer.clone();
+    let progress_ui_keep = Rc::new(progress_ui);
+    let progress_ui_ref = progress_ui_keep.clone();
+
+    let new_timer = Timer::default();
+    new_timer.start(TimerMode::Repeated, Duration::from_millis(80), move || {
+        let _keep = &progress_ui_ref;
+        if let Some(ui) = p_weak.upgrade() {
+            let percent = timer_progress.load(Ordering::Relaxed);
+            ui.set_progress(percent as f32 / 100.0);
+            if percent != shown_percent {
+                shown_percent = percent;
+                let text = if percent == 0 {
+                    if arabic { "جاري فك الضغط...".to_string() } else { "Extracting files...".to_string() }
+                } else if arabic {
+                    format!("جاري فك الضغط... {percent}%")
+                } else {
+                    format!("Extracting files... {percent}%")
+                };
+                ui.set_message(text.into());
+            }
+
+            if let Ok(result) = timer_receiver.lock().unwrap().try_recv() {
+                let status_msg = match result {
+                    Ok(RunOutcome::Finished) => {
+                        ui.set_progress(1.0);
+                        ui.set_message(if arabic { "تم فك الضغط بنجاح".into() } else { "Extraction completed successfully".into() });
+                        if arabic {
+                            format!("تم فك الضغط بنجاح إلى {}", dest.display())
+                        } else {
+                            format!("Extracted successfully to {}", dest.display())
+                        }
+                    }
+                    Ok(RunOutcome::Cancelled) => {
+                        if arabic { "تم إلغاء فك الضغط".to_string() } else { "Extraction cancelled".to_string() }
+                    }
+                    Err(e) => {
+                        format!("Error: {e}")
+                    }
+                };
+
+                let p_weak_close = p_weak.clone();
+                let main_done = main_ui.clone();
+                let self_timer_cleanup = timer_self.clone();
+                let status_msg_clone = status_msg.clone();
+                let close_timer = Timer::default();
+                close_timer.start(TimerMode::SingleShot, Duration::from_millis(400), move || {
+                    if let Some(p) = p_weak_close.upgrade() {
+                        let _ = p.hide();
+                    }
+                    if let Some(m) = main_done.upgrade() {
+                        m.set_status(status_msg_clone.as_str().into());
+                    }
+                    let _ = self_timer_cleanup.borrow_mut().take();
+                });
+            }
+        }
+    });
+
+    *timer.borrow_mut() = Some(new_timer);
+    Ok(())
+}
+
 fn status_error(ui: &MainWindow, result: Result<(), String>) {
     if let Err(e) = result { ui.set_status(format!("Error: {e}").into()); }
 }
@@ -1126,24 +1365,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let selected = state.borrow().archive.clone()
             .or_else(|| rfd::FileDialog::new().pick_file());
         if let Some(p) = selected {
-            if let Some(dest) = rfd::FileDialog::new().pick_folder() {
-                // -o argument is supplied as a single OS-specific path value.
-                let result = list_member_names(&p).and_then(|members| {
-                    if members.is_empty() { return Err("Could not read any archive entries".into()); }
-                    if members.iter().any(|name| !member_path_looks_safe(name)) {
-                        return Err("Unsafe entry path detected; extraction aborted".into());
-                    }
-                    let mut output_option = std::ffi::OsString::from("-o");
-                    output_option.push(dest.as_os_str());
-                    let args = vec![std::ffi::OsString::from("x"), std::ffi::OsString::from("-y"),
-                        std::ffi::OsString::from("-aos"), output_option, p.as_os_str().to_owned()];
-                    run_7z(&args, None)
-                });
+            let default_folder = p.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+            if let Some(dest) = rfd::FileDialog::new().set_directory(&default_folder).pick_folder() {
                 if let Some(ui) = weak.upgrade() {
-                    match result {
-                        Ok(_) => ui.set_status(format!("Extracted to {}", dest.display()).into()),
-                        Err(e) => ui.set_status(format!("Error: {e}").into()),
+                    let arabic = ui.get_arabic_mode();
+                    let model = ui.get_entries();
+                    let count = model.row_count();
+                    let mut selected_files = Vec::new();
+                    for i in 0..count {
+                        if let Some(entry) = model.row_data(i) {
+                            if entry.is_selected && entry.name != ".." {
+                                selected_files.push(entry.name.to_string());
+                            }
+                        }
                     }
+                    let _ = run_in_app_extraction(p, dest, selected_files, arabic, weak.clone());
                 }
             }
         }
