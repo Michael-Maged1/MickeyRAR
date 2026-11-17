@@ -267,6 +267,7 @@ export component MainWindow inherits Window {
     callback run-benchmark();
     callback nav-favorite(string);
     callback show-about();
+    callback check-updates();
 
     VerticalBox {
         spacing: 0px;
@@ -1000,6 +1001,7 @@ export component MainWindow inherits Window {
             DropdownMenuItem { text: root.arabic-mode ? "صفحة الفيسبوك" : "Facebook Page"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.open-url("https://www.facebook.com/michaelmagedm"); } }
             DropdownMenuItem { text: root.arabic-mode ? "صفحة الإنستغرام" : "Instagram Profile"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.open-url("https://www.instagram.com/michaelmagedm/"); } }
             MenuDivider { dark-mode: root.dark-mode; }
+            DropdownMenuItem { text: root.arabic-mode ? "التحقق من وجود تحديثات..." : "Check for updates..."; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.check-updates(); } }
             DropdownMenuItem { text: root.arabic-mode ? "حول Mickey RAR..." : "About Mickey RAR..."; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.show-about(); } }
         }
     }

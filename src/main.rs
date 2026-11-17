@@ -91,7 +91,8 @@ struct AppState {
 fn context_paths() -> Vec<PathBuf> {
     let mut reading_paths = false;
     std::env::args_os().skip(1).filter_map(|arg| {
-        if arg == "--add" || arg == "--compress" || arg == "--compress-email" {
+        let s = arg.to_string_lossy();
+        if matches!(s.as_ref(), "--add" | "--compress" | "--compress-email" | "--extract-here" | "--extract-to" | "--extract-to-folder") {
             reading_paths = true;
             return None;
         }
@@ -100,7 +101,72 @@ fn context_paths() -> Vec<PathBuf> {
 }
 
 fn context_operation() -> Option<String> {
-    std::env::args().skip(1).find(|arg| matches!(arg.as_str(), "--add" | "--compress" | "--compress-email"))
+    std::env::args().skip(1).find(|arg| matches!(arg.as_str(),
+        "--add" | "--compress" | "--compress-email" |
+        "--extract-here" | "--extract-to" | "--extract-to-folder"
+    ))
+}
+
+fn run_context_extract_here(paths: Vec<PathBuf>, _arabic: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if paths.is_empty() { return Err("No archive selected".into()); }
+    for archive in &paths {
+        if !archive.exists() { continue; }
+        let dest = archive.parent().unwrap_or_else(|| Path::new("."));
+        let mut output_option = std::ffi::OsString::from("-o");
+        output_option.push(dest.as_os_str());
+        let args = vec![
+            std::ffi::OsString::from("x"),
+            std::ffi::OsString::from("-y"),
+            std::ffi::OsString::from("-aos"),
+            output_option,
+            archive.as_os_str().to_owned(),
+        ];
+        run_7z(&args, None).map_err(|e| format!("Extraction error: {e}"))?;
+    }
+    Ok(())
+}
+
+fn run_context_extract_to_folder(paths: Vec<PathBuf>, _arabic: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if paths.is_empty() { return Err("No archive selected".into()); }
+    for archive in &paths {
+        if !archive.exists() { continue; }
+        let parent = archive.parent().unwrap_or_else(|| Path::new("."));
+        let stem = archive.file_stem().unwrap_or_default().to_string_lossy();
+        let dest = parent.join(stem.as_ref());
+        let _ = std::fs::create_dir_all(&dest);
+        let mut output_option = std::ffi::OsString::from("-o");
+        output_option.push(dest.as_os_str());
+        let args = vec![
+            std::ffi::OsString::from("x"),
+            std::ffi::OsString::from("-y"),
+            std::ffi::OsString::from("-aos"),
+            output_option,
+            archive.as_os_str().to_owned(),
+        ];
+        run_7z(&args, None).map_err(|e| format!("Extraction error: {e}"))?;
+    }
+    Ok(())
+}
+
+fn run_context_extract_to(paths: Vec<PathBuf>, _arabic: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if paths.is_empty() { return Err("No archive selected".into()); }
+    let default_folder = paths[0].parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    if let Some(dest) = rfd::FileDialog::new().set_directory(&default_folder).pick_folder() {
+        for archive in &paths {
+            if !archive.exists() { continue; }
+            let mut output_option = std::ffi::OsString::from("-o");
+            output_option.push(dest.as_os_str());
+            let args = vec![
+                std::ffi::OsString::from("x"),
+                std::ffi::OsString::from("-y"),
+                std::ffi::OsString::from("-aos"),
+                output_option,
+                archive.as_os_str().to_owned(),
+            ];
+            run_7z(&args, None).map_err(|e| format!("Extraction error: {e}"))?;
+        }
+    }
+    Ok(())
 }
 
 fn run_context_compression(paths: Vec<PathBuf>, arabic: bool) -> Result<(), Box<dyn std::error::Error>> {
@@ -742,6 +808,81 @@ where
     ui.set_selected_info(info.into());
 }
 
+const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const GITHUB_REPO: &str = "Michael-Maged1/MickeyRAR";
+
+#[derive(Clone, Debug, Default)]
+struct UpdateInfo {
+    version: String,
+    download_url: Option<String>,
+}
+
+fn is_version_newer(remote: &str, current: &str) -> bool {
+    let r_parts: Vec<u32> = remote.split('.').filter_map(|s| s.parse().ok()).collect();
+    let c_parts: Vec<u32> = current.split('.').filter_map(|s| s.parse().ok()).collect();
+    for (r, c) in r_parts.iter().zip(c_parts.iter()) {
+        if r > c { return true; }
+        if r < c { return false; }
+    }
+    r_parts.len() > c_parts.len()
+}
+
+fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
+    #[cfg(windows)]
+    {
+        let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
+        let mut cmd = std::process::Command::new("curl.exe");
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.args(["-s", "-H", "User-Agent: MickeyRAR-App", &url]);
+        let output = cmd.output().map_err(|e| format!("Network check failed: {e}"))?;
+        if !output.status.success() {
+            return Err("Could not reach GitHub API".into());
+        }
+        let json_str = String::from_utf8_lossy(&output.stdout);
+        if json_str.contains("\"message\": \"Not Found\"") {
+            return Ok(None);
+        }
+
+        let tag = json_str.lines()
+            .find(|l| l.contains("\"tag_name\":"))
+            .and_then(|l| {
+                let parts: Vec<&str> = l.split(':').collect();
+                if parts.len() >= 2 {
+                    Some(parts[1].trim().trim_matches(|c| c == '"' || c == ',' || c == ' ').to_string())
+                } else {
+                    None
+                }
+            });
+
+        let Some(tag_name) = tag else {
+            return Ok(None);
+        };
+
+        let remote_ver = tag_name.trim_start_matches('v');
+        if is_version_newer(remote_ver, CURRENT_VERSION) {
+            let mut dl_url = None;
+            for line in json_str.lines() {
+                if line.contains("browser_download_url") && line.contains("Setup.exe") {
+                    let parts: Vec<&str> = line.split("http").collect();
+                    if parts.len() >= 2 {
+                        let full = format!("http{}", parts[1].trim_matches(|c| c == '"' || c == ','));
+                        dl_url = Some(full);
+                        break;
+                    }
+                }
+            }
+            if dl_url.is_none() {
+                dl_url = Some(format!("https://github.com/{GITHUB_REPO}/releases/latest"));
+            }
+            return Ok(Some(UpdateInfo {
+                version: tag_name,
+                download_url: dl_url,
+            }));
+        }
+    }
+    Ok(None)
+}
+
 fn status_error(ui: &MainWindow, result: Result<(), String>) {
     if let Err(e) = result { ui.set_status(format!("Error: {e}").into()); }
 }
@@ -749,8 +890,15 @@ fn status_error(ui: &MainWindow, result: Result<(), String>) {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(operation) = context_operation() {
         let paths = context_paths();
-        if operation == "--add" { return run_archive_dialog(paths, load_language().is_arabic()); }
-        return run_context_compression(paths, load_language().is_arabic());
+        let arabic = load_language().is_arabic();
+        match operation.as_str() {
+            "--add" => return run_archive_dialog(paths, arabic),
+            "--compress" | "--compress-email" => return run_context_compression(paths, arabic),
+            "--extract-here" => return run_context_extract_here(paths, arabic),
+            "--extract-to" => return run_context_extract_to(paths, arabic),
+            "--extract-to-folder" => return run_context_extract_to_folder(paths, arabic),
+            _ => {}
+        }
     }
     let ui = MainWindow::new()?;
     quit_process_on_close(&ui.window());
@@ -1394,6 +1542,94 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+
+    {
+        let weak = ui.as_weak();
+        ui.on_check_updates(move || {
+            if let Some(ui) = weak.upgrade() {
+                let arabic = ui.get_arabic_mode();
+                ui.set_status(if arabic {
+                    "جاري التحقق من التحديثات من GitHub...".into()
+                } else {
+                    "Checking GitHub for new updates...".into()
+                });
+
+                let weak_bg = weak.clone();
+                thread::spawn(move || {
+                    let res = check_for_updates();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = weak_bg.upgrade() {
+                            let arabic = ui.get_arabic_mode();
+                            match res {
+                                Ok(Some(update)) => {
+                                    let msg = if arabic {
+                                        format!("يوجد تحديث جديد متوفر ({})! جاري تنزيل التحديث...", update.version)
+                                    } else {
+                                        format!("New update available ({})! Downloading installer...", update.version)
+                                    };
+                                    ui.set_status(msg.into());
+
+                                    if let Some(dl_url) = update.download_url {
+                                        thread::spawn(move || {
+                                            let temp_installer = std::env::temp_dir().join("MickeyRAR-Setup-Update.exe");
+                                            let mut curl = std::process::Command::new("curl.exe");
+                                            #[cfg(windows)]
+                                            curl.creation_flags(CREATE_NO_WINDOW);
+                                            curl.args(["-L", "-o", &temp_installer.to_string_lossy(), &dl_url]);
+                                            if let Ok(st) = curl.status() {
+                                                if st.success() && temp_installer.exists() {
+                                                    #[cfg(windows)]
+                                                    {
+                                                        let _ = std::process::Command::new("cmd")
+                                                            .args(["/c", "start", "", &temp_installer.to_string_lossy()])
+                                                            .spawn();
+                                                        std::process::exit(0);
+                                                    }
+                                                }
+                                            }
+                                        });
+                                    }
+                                }
+                                Ok(None) => {
+                                    let msg = if arabic {
+                                        format!("أنت تستخدم أحدث إصدار من ميكي رار (v{})", CURRENT_VERSION)
+                                    } else {
+                                        format!("Mickey RAR is up to date (v{})", CURRENT_VERSION)
+                                    };
+                                    ui.set_status(msg.into());
+                                }
+                                Err(e) => {
+                                    ui.set_status(format!("Update check error: {e}").into());
+                                }
+                            }
+                        }
+                    });
+                });
+            }
+        });
+    }
+
+    let update_check_timer = Timer::default();
+    let update_check_weak = ui.as_weak();
+    update_check_timer.start(TimerMode::SingleShot, Duration::from_secs(3), move || {
+        let weak_bg = update_check_weak.clone();
+        thread::spawn(move || {
+            if let Ok(Some(update)) = check_for_updates() {
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = weak_bg.upgrade() {
+                        let arabic = ui.get_arabic_mode();
+                        let msg = if arabic {
+                            format!("🔔 يتوفر إصدار جديد من البرنامج ({})! افتح قائمة مساعدة للتحديث.", update.version)
+                        } else {
+                            format!("🔔 New update ({}) is available on GitHub! Check Help menu to update.", update.version)
+                        };
+                        ui.set_status(msg.into());
+                    }
+                });
+            }
+        });
+    });
+
     ui.run()?;
     Ok(())
 }

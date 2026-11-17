@@ -26,7 +26,8 @@
 You can directly download the pre-compiled standalone Windows installer here:
 يمكنك تحميل مثبت البرنامج المستقل لويندوز مباشرة من هنا:
 
-👉 **[Download MickeyRAR-Setup.exe (المثبت الجاهز)](installer/MickeyRAR-Setup.exe)**
+👉 **[Download MickeyRAR-Setup.exe (المثبت الجاهز)](installer/MickeyRAR-Setup.exe)**  
+📦 **[Latest Releases on GitHub](https://github.com/Michael-Maged1/MickeyRAR/releases)**
 
 ---
 
@@ -41,13 +42,22 @@ You can directly download the pre-compiled standalone Windows installer here:
 ## ✨ Features | المميزات
 
 * 🎨 **Windows 11 Fluent UI**: True black dark theme (`#191919`) with custom neon-green branding (`#8fd62e`), plus light mode toggle.
+* 🖱️ **Windows Explorer Context Menu (قائمة كليك يمين)**:
+  * **Extract Here (فك الضغط هنا)**: One-click instant extraction in the current directory.
+  * **Extract to subfolder (استخراج إلى مجلد)**: Creates a dedicated folder named after the archive and extracts inside it.
+  * **Extract files... (استخراج إلى...)**: Opens Mickey RAR directly to choose extraction target path.
+  * **Add to archive... & Compress to ZIP**: Instant compression shortcuts.
+* 🔄 **GitHub Auto-Update System (نظام التحديث التلقائي)**:
+  * Automatically checks GitHub Releases on startup in the background.
+  * Manual check via `Help -> Check for updates...` (مساعدة -> التحقق من وجود تحديثات...).
+  * Informs the user and automatically downloads & launches the installer for updates from `Michael-Maged1/MickeyRAR`.
 * 📋 **Authentic WinRAR Menus**:
   * **File (ملف)**: Open archive, choose folder, refresh, select all, invert selection, clear selection, and exit.
   * **Commands (أوامر)**: Add files, extract, test integrity, view files, delete files, protect archive, and SFX.
   * **Tools (أدوات)**: Show archive details, Windows Defender virus scan integration, and 7-Zip hardware benchmark.
   * **Favorites (المفضلة)**: One-click jump to Desktop, Downloads, Documents, and Pictures.
   * **Options (خيارات)**: Ultra LZMA2 compression settings (threads & solid mode), theme toggle, and language switch.
-  * **Help (مساعدة)**: Social profile links and About dialog.
+  * **Help (مساعدة)**: Social profile links, GitHub updates, and About dialog.
 * 🌐 **Bilingual Interface**: Seamless instant switching between **العربية** (Arabic) and **English**.
 * ⚡ **Ultra LZMA2 & ZIP Engine**: Multi-threaded compression supporting levels 0–9 with solid block optimization.
 * 🛡️ **Windows Defender Integration**: One-click background virus scanning directly from the Tools menu.
@@ -124,5 +134,6 @@ Distributed under the **MIT License**. See `Cargo.toml` for details.
 ## 👨‍💻 Developer | المطور
 
 Developed by **Michael Maged (مايكل ماجد)**
+- GitHub: [Michael-Maged1](https://github.com/Michael-Maged1)
 - Facebook: [michaelmagedm](https://www.facebook.com/michaelmagedm)
 - Instagram: [@michaelmagedm](https://www.instagram.com/michaelmagedm/)

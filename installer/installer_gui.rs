@@ -103,9 +103,12 @@ fn register_context_menu(executable: &PathBuf) {
     let command_store = r"HKLM\Software\Microsoft\Windows\CurrentVersion\Explorer\CommandStore\shell";
     let executable = executable.display().to_string();
     let commands = [
-        ("MickeyRAR.Add", "Add to ZIP archive...", "--add"),
+        ("MickeyRAR.Add", "Add to archive with Mickey RAR...", "--add"),
         ("MickeyRAR.Compress", "Compress to ZIP with Mickey RAR", "--compress"),
         ("MickeyRAR.Email", "Compress to ZIP and email...", "--compress-email"),
+        ("MickeyRAR.ExtractHere", "Extract Here (فك الضغط هنا)", "--extract-here"),
+        ("MickeyRAR.ExtractToFolder", "Extract to subfolder (استخراج إلى مجلد)", "--extract-to-folder"),
+        ("MickeyRAR.ExtractTo", "Extract files... (استخراج إلى...)", "--extract-to"),
     ];
     for (verb, label, flag) in commands {
         let verb_key = format!(r"{command_store}\{verb}");
@@ -116,9 +119,11 @@ fn register_context_menu(executable: &PathBuf) {
     for target in [
         r"HKLM\Software\Classes\*\shell\MickeyRAR",
         r"HKLM\Software\Classes\Directory\shell\MickeyRAR",
+        r"HKCU\Software\Classes\*\shell\MickeyRAR",
+        r"HKCU\Software\Classes\Directory\shell\MickeyRAR",
     ] {
         registry_value(target, "MUIVerb", "Mickey RAR");
-        registry_value(target, "SubCommands", "MickeyRAR.Add;MickeyRAR.Compress;MickeyRAR.Email");
+        registry_value(target, "SubCommands", "MickeyRAR.ExtractHere;MickeyRAR.ExtractToFolder;MickeyRAR.ExtractTo;MickeyRAR.Add;MickeyRAR.Compress;MickeyRAR.Email");
         registry_value(target, "Icon", &executable);
     }
 }
@@ -127,8 +132,8 @@ fn register_uninstall(install_dir: &PathBuf, executable: &PathBuf, uninstaller: 
     let key = r"HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\MickeyRAR";
     let values = [
         ("DisplayName", "Mickey RAR".to_string()),
-        ("DisplayVersion", "0.4.0".to_string()),
-        ("Publisher", "Mickey RAR".to_string()),
+        ("DisplayVersion", "0.5.0".to_string()),
+        ("Publisher", "Michael Maged".to_string()),
         ("InstallLocation", install_dir.display().to_string()),
         ("DisplayIcon", executable.display().to_string()),
         ("UninstallString", format!("\"{}\"", uninstaller.display())),
