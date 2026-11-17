@@ -1,0 +1,37 @@
+[package]
+name = "mickey-rar"
+version = "0.4.0"
+edition = "2021"
+build = "build.rs"
+license = "MIT"
+description = "Mickey RAR cross-platform classic archive manager reviewed starter in Rust and Slint"
+
+[dependencies]
+slint = "=1.18.0"
+rfd = "0.15"
+webbrowser = "1.2"
+chrono = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+# Job objects so a 7-Zip child can never outlive this process and keep the
+# half-written archive locked.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+slint-build = "=1.18.0"
+winres = "0.1"
+
+[[bin]]
+name = "mickey-rar-installer"
+path = "installer/installer_gui.rs"
+
+[[bin]]
+name = "mickey-rar-uninstaller"
+path = "installer/uninstaller.rs"

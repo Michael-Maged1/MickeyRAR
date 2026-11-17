@@ -1,0 +1,199 @@
+{
+  "product": "Mickey RAR",
+  "version": "0.5.0-design-lock",
+  "visual_reference": "assets/approved-ui-reference.png",
+  "visual_reference_sha256": "fa97966b6ac266e9aa192c3b521021891e632fa49328c2bb3f8573800981afc4",
+  "visual_size_px": [
+    1448,
+    1086
+  ],
+  "default_language": "en",
+  "supported_languages": [
+    "en",
+    "ar"
+  ],
+  "rtl_required": true,
+  "technology": [
+    "Rust",
+    "Slint",
+    "7-Zip CLI"
+  ],
+  "compression_default": {
+    "format": "7z",
+    "level": 9,
+    "method": "LZMA2",
+    "solid": true
+  },
+  "design_constraints": {
+    "layout": "classic_winrar_style",
+    "large_banner": false,
+    "boxed_toolbar_buttons": false,
+    "glow_effects": false,
+    "style": "matte charcoal and muted lime",
+    "icon": "original small stacked archive books"
+  },
+  "features": [
+    {
+      "id": "add",
+      "en": "Add",
+      "ar": "إضافة",
+      "callback": "create_archive",
+      "implementation": "main.rs / engine.rs",
+      "status": "partial",
+      "notes": "Opens chooser and constructs 7z Ultra arguments; blocks UI; no progress/cancel, directories and multi-folder cases limited"
+    },
+    {
+      "id": "extract",
+      "en": "Extract",
+      "ar": "استخراج",
+      "callback": "extract_archive",
+      "implementation": "main.rs / engine.rs",
+      "status": "partial",
+      "notes": "Opens destination and calls 7z; metadata validation incomplete for symlinks/hardlinks; requires security review"
+    },
+    {
+      "id": "test",
+      "en": "Test",
+      "ar": "اختبار",
+      "callback": "test_archive",
+      "implementation": "main.rs / engine.rs",
+      "status": "partial",
+      "notes": "7z t exists; password errors and outcomes require integration testing"
+    },
+    {
+      "id": "view",
+      "en": "View",
+      "ar": "عرض",
+      "callback": "view_entry",
+      "implementation": "not implemented",
+      "status": "missing",
+      "notes": "Read-only selected member preview with size/type limits, no implicit execution"
+    },
+    {
+      "id": "delete",
+      "en": "Delete",
+      "ar": "حذف",
+      "callback": "delete_entry",
+      "implementation": "not implemented",
+      "status": "missing",
+      "notes": "Confirmation, in-archive removal, undo limitations, audit"
+    },
+    {
+      "id": "find",
+      "en": "Find",
+      "ar": "بحث",
+      "callback": "find_entries",
+      "implementation": "not implemented",
+      "status": "missing",
+      "notes": "Search folder and archive member names, Unicode normalization"
+    },
+    {
+      "id": "wizard",
+      "en": "Wizard",
+      "ar": "المعالج",
+      "callback": "open_wizard",
+      "implementation": "not implemented",
+      "status": "missing",
+      "notes": "Guided steps for add/extract/test"
+    },
+    {
+      "id": "info",
+      "en": "Info",
+      "ar": "معلومات",
+      "callback": "show_archive_info",
+      "implementation": "not implemented",
+      "status": "missing",
+      "notes": "Archive metadata and verified compression ratio"
+    },
+    {
+      "id": "repair",
+      "en": "Repair",
+      "ar": "إصلاح",
+      "callback": "repair_archive",
+      "implementation": "not implemented",
+      "status": "missing",
+      "notes": "Format-aware capability, never promise RAR recovery where unavailable"
+    },
+    {
+      "id": "back",
+      "en": "Back",
+      "ar": "رجوع",
+      "callback": "navigate_back",
+      "implementation": "not implemented",
+      "status": "missing",
+      "notes": "Navigation history"
+    },
+    {
+      "id": "forward",
+      "en": "Forward",
+      "ar": "تقدم",
+      "callback": "navigate_forward",
+      "implementation": "not implemented",
+      "status": "missing",
+      "notes": "Navigation history"
+    },
+    {
+      "id": "up",
+      "en": "Up",
+      "ar": "لأعلى",
+      "callback": "navigate_parent",
+      "implementation": "not implemented",
+      "status": "missing",
+      "notes": "Parent navigation"
+    },
+    {
+      "id": "path",
+      "en": "Address bar",
+      "ar": "شريط المسار",
+      "callback": "navigate_to",
+      "implementation": "location property only",
+      "status": "partial",
+      "notes": "Read-only path currently; keyboard path navigation not implemented"
+    },
+    {
+      "id": "file_list",
+      "en": "File list",
+      "ar": "قائمة الملفات",
+      "callback": "open_entry",
+      "implementation": "main.rs / main.slint",
+      "status": "partial",
+      "notes": "Only one-column text buttons, no structured table/selection/sort"
+    },
+    {
+      "id": "sidebar",
+      "en": "Archive information",
+      "ar": "معلومات الأرشيف",
+      "callback": "show_archive_info",
+      "implementation": "not implemented",
+      "status": "missing",
+      "notes": "Design-only side panel"
+    },
+    {
+      "id": "status",
+      "en": "Status bar",
+      "ar": "شريط الحالة",
+      "callback": "set_status",
+      "implementation": "main.rs / main.slint",
+      "status": "partial",
+      "notes": "Basic status message, missing totals and selection"
+    },
+    {
+      "id": "language",
+      "en": "Language",
+      "ar": "اللغة",
+      "callback": "toggle_language",
+      "implementation": "main.rs / i18n.rs",
+      "status": "partial",
+      "notes": "English default and toggling present; RTL layout not implemented"
+    },
+    {
+      "id": "settings",
+      "en": "Ultra settings",
+      "ar": "إعدادات Ultra",
+      "callback": "save_compression_settings",
+      "implementation": "main.rs / engine.rs",
+      "status": "partial",
+      "notes": "Settings persistence present; full validation needs testing"
+    }
+  ]
+}

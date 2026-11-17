@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <!-- Bug Body -->
+  <ellipse cx="24" cy="25" rx="7.5" ry="9.5"
+           fill="none" stroke="#e0e0e0" stroke-width="2.3" />
+  <!-- Center division line -->
+  <line x1="24" y1="16" x2="24" y2="34" stroke="#e0e0e0" stroke-width="1.8" />
+  <!-- Antennae -->
+  <path d="M 21.5 16 C 20.5 11 16.5 10 14 11"
+        fill="none" stroke="#8fd62e" stroke-width="2.1" stroke-linecap="round" />
+  <path d="M 26.5 16 C 27.5 11 31.5 10 34 11"
+        fill="none" stroke="#8fd62e" stroke-width="2.1" stroke-linecap="round" />
+  <!-- 6 Bent Legs -->
+  <path d="M 17 19 L 11 17 L 9 13" fill="none" stroke="#e0e0e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M 31 19 L 37 17 L 39 13" fill="none" stroke="#e0e0e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M 16.5 25 L 10 25 L 8 28" fill="none" stroke="#e0e0e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M 31.5 25 L 38 25 L 40 28" fill="none" stroke="#e0e0e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M 17 31 L 11 34 L 10 38" fill="none" stroke="#e0e0e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M 31 31 L 37 34 L 38 38" fill="none" stroke="#e0e0e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+</svg>

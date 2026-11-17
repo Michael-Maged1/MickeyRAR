@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <!-- Lens -->
+  <circle cx="21" cy="20" r="10.5"
+          fill="none" stroke="#e0e0e0" stroke-width="2.4" />
+  <!-- Handle -->
+  <line x1="28.5" y1="27.5" x2="39" y2="38"
+        stroke="#e0e0e0" stroke-width="2.6" stroke-linecap="round" />
+</svg>

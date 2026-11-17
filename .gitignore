@@ -1,0 +1,27 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Large binary files & generated installers
+*.exe
+!installer/runtime/7z.exe
+!installer/MickeyRAR-Setup.exe
+
+# Windows Resource files
+installer/*.res
+
+# OS specific files
+Thumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# IDE / Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Temporary and log files
+*.log
+scratch/
