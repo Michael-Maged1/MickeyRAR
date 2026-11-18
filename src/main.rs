@@ -165,10 +165,10 @@ fn run_context_extraction_with_options(
                 abs_archive.parent().unwrap_or_else(|| Path::new(".")).to_path_buf()
             };
             let _ = std::fs::create_dir_all(&dest);
-            let dest_str = dest.to_string_lossy();
-            let clean_dest = dest_str.trim_end_matches(['\\', '/']);
+            // Build -oPath using OsString directly to avoid any UTF-8
+            // round-trip that could corrupt non-ASCII (Arabic) folder names.
             let mut output_arg = std::ffi::OsString::from("-o");
-            output_arg.push(clean_dest);
+            output_arg.push(dest.as_os_str());
 
             let args = vec![
                 std::ffi::OsString::from("x"),
@@ -214,6 +214,8 @@ fn run_context_extraction_with_options(
     let timer_progress = progress_handle.clone();
     let timer = Timer::default();
     let mut shown_percent = u8::MAX;
+    // Keeps the auto-close timer alive until it fires.
+    let close_timer_holder: Arc<Mutex<Option<Timer>>> = Arc::new(Mutex::new(None));
 
     timer.start(TimerMode::Repeated, Duration::from_millis(80), move || {
         if let Some(ui) = weak.upgrade() {
@@ -235,7 +237,7 @@ fn run_context_extraction_with_options(
                 match result {
                     Ok(RunOutcome::Finished) => {
                         ui.set_progress(1.0);
-                        ui.set_message(if arabic { "تم فك الضغط بنجاح".into() } else { "Extraction completed successfully".into() });
+                        ui.set_message(if arabic { "تم فك الضغط بنجاح ✔".into() } else { "Extraction completed successfully ✔".into() });
                     }
                     Ok(RunOutcome::Cancelled) => {
                         ui.set_message(if arabic { "تم إلغاء فك الضغط".into() } else { "Extraction cancelled".into() });
@@ -244,7 +246,14 @@ fn run_context_extraction_with_options(
                         ui.set_message(format!("Error: {error}").into());
                     }
                 }
-                let _ = slint::quit_event_loop();
+                // Show result for 1 second, then close.
+                let holder = close_timer_holder.clone();
+                let auto_close = Timer::default();
+                auto_close.start(TimerMode::SingleShot, Duration::from_millis(1000), move || {
+                    let _ = slint::quit_event_loop();
+                    *holder.lock().unwrap() = None; // drop timer
+                });
+                *close_timer_holder.lock().unwrap() = Some(auto_close);
             }
         }
     });
@@ -1023,10 +1032,9 @@ fn run_in_app_extraction(
 
     thread::spawn(move || {
         let _ = std::fs::create_dir_all(&dest_clone);
-        let dest_str = dest_clone.to_string_lossy();
-        let clean_dest = dest_str.trim_end_matches(['\\', '/']);
+        // Build -oPath using OsString directly to preserve non-ASCII (Arabic) folder names.
         let mut output_arg = std::ffi::OsString::from("-o");
-        output_arg.push(clean_dest);
+        output_arg.push(dest_clone.as_os_str());
 
         let mut args = vec![
             std::ffi::OsString::from("x"),
@@ -1035,12 +1043,18 @@ fn run_in_app_extraction(
             output_arg,
             archive_clone.as_os_str().to_owned(),
         ];
+        // Only append file filters when user selected specific files;
+        // passing no filters extracts everything (correct default).
         for f in selected_clone {
+            // 7-Zip glob pattern: wrap in quotes for paths with spaces.
             args.push(std::ffi::OsString::from(f));
         }
 
         let res = run_7z_cancellable_with_progress(&args, None, &worker_cancelled, Some(&worker_progress));
-        worker_progress.store(100, Ordering::Relaxed);
+        // Store 100% only on success so the UI shows the real final percent on error.
+        if matches!(res, Ok(RunOutcome::Finished)) {
+            worker_progress.store(100, Ordering::Relaxed);
+        }
         worker_finished.store(true, Ordering::SeqCst);
         let _ = sender.send(res);
     });
