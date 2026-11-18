@@ -1520,57 +1520,57 @@ fn is_version_newer(remote: &str, current: &str) -> bool {
 }
 
 fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
+    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
+    let curl_bin = if cfg!(windows) { "curl.exe" } else { "curl" };
+    let mut cmd = std::process::Command::new(curl_bin);
     #[cfg(windows)]
-    {
-        let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
-        let mut cmd = std::process::Command::new("curl.exe");
-        cmd.creation_flags(CREATE_NO_WINDOW);
-        cmd.args(["-s", "-H", "User-Agent: MickeyRAR-App", &url]);
-        let output = cmd.output().map_err(|e| format!("Network check failed: {e}"))?;
-        if !output.status.success() {
-            return Err("Could not reach GitHub API".into());
-        }
-        let json_str = String::from_utf8_lossy(&output.stdout);
-        if json_str.contains("\"message\": \"Not Found\"") {
-            return Ok(None);
-        }
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.args(["-s", "-H", "User-Agent: MickeyRAR-App", &url]);
+    let output = cmd.output().map_err(|e| format!("Network check failed: {e}"))?;
+    if !output.status.success() {
+        return Err("Could not reach GitHub API".into());
+    }
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    if json_str.contains("\"message\": \"Not Found\"") {
+        return Ok(None);
+    }
 
-        let tag = json_str.lines()
-            .find(|l| l.contains("\"tag_name\":"))
-            .and_then(|l| {
-                let parts: Vec<&str> = l.split(':').collect();
+    let tag = json_str.lines()
+        .find(|l| l.contains("\"tag_name\":"))
+        .and_then(|l| {
+            let parts: Vec<&str> = l.split(':').collect();
+            if parts.len() >= 2 {
+                Some(parts[1].trim().trim_matches(|c| c == '"' || c == ',' || c == ' ').to_string())
+            } else {
+                None
+            }
+        });
+
+    let Some(tag_name) = tag else {
+        return Ok(None);
+    };
+
+    let remote_ver = tag_name.trim_start_matches('v');
+    if is_version_newer(remote_ver, CURRENT_VERSION) {
+        let mut dl_url = None;
+        let target_asset_ext = if cfg!(target_os = "macos") { ".dmg" } else { "Setup.exe" };
+        for line in json_str.lines() {
+            if line.contains("browser_download_url") && line.contains(target_asset_ext) {
+                let parts: Vec<&str> = line.split("http").collect();
                 if parts.len() >= 2 {
-                    Some(parts[1].trim().trim_matches(|c| c == '"' || c == ',' || c == ' ').to_string())
-                } else {
-                    None
-                }
-            });
-
-        let Some(tag_name) = tag else {
-            return Ok(None);
-        };
-
-        let remote_ver = tag_name.trim_start_matches('v');
-        if is_version_newer(remote_ver, CURRENT_VERSION) {
-            let mut dl_url = None;
-            for line in json_str.lines() {
-                if line.contains("browser_download_url") && line.contains("Setup.exe") {
-                    let parts: Vec<&str> = line.split("http").collect();
-                    if parts.len() >= 2 {
-                        let full = format!("http{}", parts[1].trim_matches(|c| c == '"' || c == ','));
-                        dl_url = Some(full);
-                        break;
-                    }
+                    let full = format!("http{}", parts[1].trim_matches(|c| c == '"' || c == ','));
+                    dl_url = Some(full);
+                    break;
                 }
             }
-            if dl_url.is_none() {
-                dl_url = Some(format!("https://github.com/{GITHUB_REPO}/releases/latest"));
-            }
-            return Ok(Some(UpdateInfo {
-                version: tag_name,
-                download_url: dl_url,
-            }));
         }
+        if dl_url.is_none() {
+            dl_url = Some(format!("https://github.com/{GITHUB_REPO}/releases/latest"));
+        }
+        return Ok(Some(UpdateInfo {
+            version: tag_name,
+            download_url: dl_url,
+        }));
     }
     Ok(None)
 }
@@ -2292,6 +2292,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .args(["/c", "start", "", &extracted_file.to_string_lossy()])
                                     .spawn();
                             }
+                            #[cfg(target_os = "macos")]
+                            {
+                                let _ = std::process::Command::new("open").arg(&extracted_file).spawn();
+                            }
+                            #[cfg(target_os = "linux")]
+                            {
+                                let _ = std::process::Command::new("xdg-open").arg(&extracted_file).spawn();
+                            }
                             ui.set_status(if ui.get_arabic_mode() {
                                 format!("تم فتح الملف: {}", name).into()
                             } else {
@@ -2308,6 +2316,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let _ = std::process::Command::new("cmd")
                                 .args(["/c", "start", "", &file_path.to_string_lossy()])
                                 .spawn();
+                        }
+                        #[cfg(target_os = "macos")]
+                        {
+                            let _ = std::process::Command::new("open").arg(&file_path).spawn();
+                        }
+                        #[cfg(target_os = "linux")]
+                        {
+                            let _ = std::process::Command::new("xdg-open").arg(&file_path).spawn();
                         }
                         ui.set_status(if ui.get_arabic_mode() {
                             format!("تم فتح: {}", name).into()
@@ -2616,8 +2632,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                                     if let Some(dl_url) = update.download_url {
                                         thread::spawn(move || {
-                                            let temp_installer = std::env::temp_dir().join("MickeyRAR-Setup-Update.exe");
-                                            let mut curl = std::process::Command::new("curl.exe");
+                                            let is_mac = cfg!(target_os = "macos");
+                                            let temp_installer = if is_mac {
+                                                std::env::temp_dir().join("MickeyRAR-Update.dmg")
+                                            } else {
+                                                std::env::temp_dir().join("MickeyRAR-Setup-Update.exe")
+                                            };
+                                            let curl_bin = if cfg!(windows) { "curl.exe" } else { "curl" };
+                                            let mut curl = std::process::Command::new(curl_bin);
                                             #[cfg(windows)]
                                             curl.creation_flags(CREATE_NO_WINDOW);
                                             curl.args(["-L", "-o", &temp_installer.to_string_lossy(), &dl_url]);
@@ -2627,6 +2649,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     {
                                                         let _ = std::process::Command::new("cmd")
                                                             .args(["/c", "start", "", &temp_installer.to_string_lossy()])
+                                                            .spawn();
+                                                        std::process::exit(0);
+                                                    }
+                                                    #[cfg(target_os = "macos")]
+                                                    {
+                                                        let _ = std::process::Command::new("open")
+                                                            .arg(&temp_installer)
                                                             .spawn();
                                                         std::process::exit(0);
                                                     }

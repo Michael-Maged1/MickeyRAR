@@ -1,0 +1,77 @@
+name: Build and Release macOS App (DMG)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'ui/**'
+      - 'assets/**'
+      - 'macos/**'
+      - 'Cargo.*'
+      - '.github/workflows/build-macos.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install 7-Zip CLI (sevenzip)
+        run: |
+          brew install sevenzip
+
+      - name: Build Mickey RAR release binary
+        run: |
+          cargo build --release --bin mickey-rar
+
+      - name: Build macOS App Bundle and DMG
+        run: |
+          chmod +x macos/build-dmg.sh
+          ./macos/build-dmg.sh
+
+      - name: Upload DMG as GitHub Actions Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MickeyRAR-macOS-DMG
+          path: MickeyRAR-macOS.dmg
+          if-no-files-found: error
+
+      - name: Upload DMG to GitHub Release (v0.5.0)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Upload or replace MickeyRAR-macOS.dmg in release v0.5.0
+          if gh release view v0.5.0 >/dev/null 2>&1; then
+            echo "Uploading MickeyRAR-macOS.dmg to release v0.5.0..."
+            gh release upload v0.5.0 MickeyRAR-macOS.dmg --clobber
+          else
+            echo "Release v0.5.0 not found, creating new release..."
+            gh release create v0.5.0 MickeyRAR-macOS.dmg \
+              --title "Mickey RAR v0.5.0 - Official Release" \
+              --notes "Standalone Windows installer and macOS DMG."
+          fi
+          echo "macOS DMG published successfully!"

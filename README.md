@@ -11,10 +11,13 @@
 
 <p align="center">
   <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.5.0/MickeyRAR-Setup.exe">
-    <img src="https://img.shields.io/badge/⚡_Download_Mickey_RAR-Setup.exe-E8573F?style=for-the-badge&logo=windows&logoColor=white" alt="Download Mickey RAR" height="38" />
+    <img src="https://img.shields.io/badge/🪟_Windows-Setup.exe-E8573F?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows Installer" height="38" />
+  </a>
+  <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.5.0/MickeyRAR-macOS.dmg">
+    <img src="https://img.shields.io/badge/🍏_macOS-MickeyRAR.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS DMG" height="38" />
   </a>
   <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/latest">
-    <img src="https://img.shields.io/badge/Latest_Release-v0.5.0-191919?style=for-the-badge&logo=github&logoColor=white" alt="Latest Release" height="38" />
+    <img src="https://img.shields.io/badge/Release-v0.5.0-191919?style=for-the-badge&logo=github&logoColor=white" alt="Latest Release" height="38" />
   </a>
 </p>
 
@@ -32,21 +35,26 @@
 
 ## 💾 Download Installer | تحميل البرنامج جاهزاً للتثبيت
 
-يمكنك تحميل مثبت البرنامج المستقل لويندوز مباشرة بنقرة واحدة وتشغيله فوراً:  
-You can directly download the pre-compiled standalone Windows installer in one click:
+اختر نظام التشغيل لتحميل المثبت بنقرة واحدة وتشغيله فوراً:  
+Choose your operating system to download the standalone installer directly:
 
 <p align="center">
   <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.5.0/MickeyRAR-Setup.exe">
-    <img src="https://img.shields.io/badge/⬇️_Direct_Download-MickeyRAR--Setup.exe_(36.7_MB)-E8573F?style=for-the-badge&logo=windows&logoColor=white" alt="Direct Download Installer" height="46" />
+    <img src="https://img.shields.io/badge/🪟_Download_for_Windows-MickeyRAR--Setup.exe-E8573F?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows" height="46" />
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.5.0/MickeyRAR-macOS.dmg">
+    <img src="https://img.shields.io/badge/🍏_Download_for_macOS-MickeyRAR--macOS.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" height="46" />
   </a>
 </p>
 
-* 🔗 **رابط التحميل المباشر للمثبت (Direct Download Link):**  
-  👉 **[Download MickeyRAR-Setup.exe](https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.5.0/MickeyRAR-Setup.exe)**
-* 📦 **صفحة الإصدارات الرسمية على GitHub:**  
+### 📥 روابط التحميل المباشرة (Direct Download Links):
+* 🪟 **لويندوز (Windows 10 / 11):**  
+  👉 **[MickeyRAR-Setup.exe (المثبت الجاهز لويندوز)](https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.5.0/MickeyRAR-Setup.exe)**
+* 🍏 **للماك (macOS Apple Silicon & Intel):**  
+  👉 **[MickeyRAR-macOS.dmg (ملف التثبيت للماك)](https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.5.0/MickeyRAR-macOS.dmg)**
+* 📦 **صفحة الإصدارات الكاملة على GitHub:**  
   [https://github.com/Michael-Maged1/MickeyRAR/releases/latest](https://github.com/Michael-Maged1/MickeyRAR/releases/latest)
-* 💻 **ملف المثبت داخل المستودع (Repo File):**  
-  [installer/MickeyRAR-Setup.exe](installer/MickeyRAR-Setup.exe)
 
 ---
 
