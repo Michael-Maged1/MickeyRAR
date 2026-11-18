@@ -9,6 +9,15 @@
   <b>برنامج إدارة وضغط الملفات العصري فائق الأداء، مستوحى من WinRAR ومبني بلغة Rust وواجهة Slint.</b>
 </p>
 
+<p align="center">
+  <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.5.0/MickeyRAR-Setup.exe">
+    <img src="https://img.shields.io/badge/⚡_Download_Mickey_RAR-Setup.exe-E8573F?style=for-the-badge&logo=windows&logoColor=white" alt="Download Mickey RAR" height="38" />
+  </a>
+  <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/latest">
+    <img src="https://img.shields.io/badge/Latest_Release-v0.5.0-191919?style=for-the-badge&logo=github&logoColor=white" alt="Latest Release" height="38" />
+  </a>
+</p>
+
 ---
 
 ## 📸 Screenshots | لقطات من البرنامج
@@ -23,11 +32,21 @@
 
 ## 💾 Download Installer | تحميل البرنامج جاهزاً للتثبيت
 
-You can directly download the pre-compiled standalone Windows installer here:
-يمكنك تحميل مثبت البرنامج المستقل لويندوز مباشرة من هنا:
+يمكنك تحميل مثبت البرنامج المستقل لويندوز مباشرة بنقرة واحدة وتشغيله فوراً:  
+You can directly download the pre-compiled standalone Windows installer in one click:
 
-👉 **[Download MickeyRAR-Setup.exe (المثبت الجاهز)](installer/MickeyRAR-Setup.exe)**  
-📦 **[Latest Releases on GitHub](https://github.com/Michael-Maged1/MickeyRAR/releases)**
+<p align="center">
+  <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.5.0/MickeyRAR-Setup.exe">
+    <img src="https://img.shields.io/badge/⬇️_Direct_Download-MickeyRAR--Setup.exe_(36.7_MB)-E8573F?style=for-the-badge&logo=windows&logoColor=white" alt="Direct Download Installer" height="46" />
+  </a>
+</p>
+
+* 🔗 **رابط التحميل المباشر للمثبت (Direct Download Link):**  
+  👉 **[Download MickeyRAR-Setup.exe](https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.5.0/MickeyRAR-Setup.exe)**
+* 📦 **صفحة الإصدارات الرسمية على GitHub:**  
+  [https://github.com/Michael-Maged1/MickeyRAR/releases/latest](https://github.com/Michael-Maged1/MickeyRAR/releases/latest)
+* 💻 **ملف المثبت داخل المستودع (Repo File):**  
+  [installer/MickeyRAR-Setup.exe](installer/MickeyRAR-Setup.exe)
 
 ---
 
