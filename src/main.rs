@@ -1610,6 +1610,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+            } else {
+                update_selection(&ui, |i, _| i == idx as usize);
+                ui.set_selected_index(idx);
             }
             if files_to_drag.is_empty() {
                 files_to_drag.push(clicked_entry.name.to_string());
@@ -1633,55 +1636,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let temp_dir = std::env::temp_dir().join("MickeyRAR_Drag");
                 let _ = std::fs::create_dir_all(&temp_dir);
 
-                let mut out_flag = std::ffi::OsString::from("-o");
-                out_flag.push(temp_dir.as_os_str());
+                // Check if all requested items are already cached in temp_dir
+                let all_cached = files_to_drag.iter().all(|f| {
+                    let p = temp_dir.join(f);
+                    p.exists() && (p.is_dir() || p.metadata().map(|m| m.len() > 0).unwrap_or(false))
+                });
 
-                let mut args = vec![
-                    std::ffi::OsString::from("x"),
-                    std::ffi::OsString::from("-y"),
-                    std::ffi::OsString::from("-aoa"),
-                    out_flag,
-                    archive_path.as_os_str().to_owned(),
-                ];
-                if let Some(ref pwd) = password {
-                    args.push(std::ffi::OsString::from(format!("-p{pwd}")));
+                if !all_cached {
+                    let mut out_flag = std::ffi::OsString::from("-o");
+                    out_flag.push(temp_dir.as_os_str());
+
+                    let mut args = vec![
+                        std::ffi::OsString::from("x"),
+                        std::ffi::OsString::from("-y"),
+                        std::ffi::OsString::from("-aoa"),
+                        out_flag,
+                        archive_path.as_os_str().to_owned(),
+                    ];
+                    if let Some(ref pwd) = password {
+                        args.push(std::ffi::OsString::from(format!("-p{pwd}")));
+                    }
+                    for f in &files_to_drag {
+                        args.push(std::ffi::OsString::from(f));
+                        args.push(std::ffi::OsString::from(format!("{f}/*")));
+                        args.push(std::ffi::OsString::from(format!("{f}\\*")));
+                    }
+
+                    ui.set_status(if arabic { "جاري تجهيز الملفات للسحب والإفلات..." } else { "Extracting files for drag and drop..." }.into());
+                    let _ = run_7z(&args, None);
                 }
+
+                let mut drag_paths: Vec<PathBuf> = Vec::new();
                 for f in &files_to_drag {
-                    args.push(std::ffi::OsString::from(f));
+                    let p = temp_dir.join(f);
+                    if p.exists() {
+                        drag_paths.push(p);
+                    }
                 }
-
-                ui.set_status(if arabic { "جاري تجهيز الملفات للسحب والإفلات..." } else { "Extracting files for drag and drop..." }.into());
-
-                match run_7z(&args, None) {
-                    Ok(_) => {
-                        let mut drag_paths: Vec<PathBuf> = Vec::new();
-                        for f in &files_to_drag {
-                            let p = temp_dir.join(f);
-                            if p.exists() {
-                                drag_paths.push(p);
-                            }
-                        }
-                        if !drag_paths.is_empty() {
-                            let path_refs: Vec<&Path> = drag_paths.iter().map(|p| p.as_path()).collect();
-                            #[cfg(windows)]
-                            {
-                                match drag_drop::windows::start_drag_drop_files(&path_refs) {
-                                    Ok(effect) => {
-                                        if effect != 0 {
-                                            ui.set_status(if arabic { "تم سحب وإفلات الملفات بنجاح ✔" } else { "Files dropped successfully ✔" }.into());
-                                        } else {
-                                            ui.set_status(if arabic { "تم إلغاء السحب والإفلات" } else { "Drag and drop cancelled" }.into());
-                                        }
-                                    }
-                                    Err(e) => {
-                                        ui.set_status(format!("Drag drop error: {e}").into());
-                                    }
+                if !drag_paths.is_empty() {
+                    let path_refs: Vec<&Path> = drag_paths.iter().map(|p| p.as_path()).collect();
+                    #[cfg(windows)]
+                    {
+                        match drag_drop::windows::start_drag_drop_files(&path_refs) {
+                            Ok(effect) => {
+                                if effect != 0 {
+                                    ui.set_status(if arabic { "تم سحب وإفلات الملفات بنجاح ✔" } else { "Files dropped successfully ✔" }.into());
+                                } else {
+                                    ui.set_status(if arabic { "تم إلغاء السحب والإفلات" } else { "Drag and drop cancelled" }.into());
                                 }
                             }
+                            Err(e) => {
+                                ui.set_status(format!("Drag drop error: {e}").into());
+                            }
                         }
-                    }
-                    Err(e) => {
-                        ui.set_status(format!("Drag extraction error: {e}").into());
                     }
                 }
             } else {

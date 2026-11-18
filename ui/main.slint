@@ -579,9 +579,9 @@ export component MainWindow inherits Window {
             border-width: 1px;
             border-color: root.dark-mode ? #2b2b2b : #dadde3;
 
-            HorizontalBox {
-                padding-left: 4px;
-                padding-right: 4px;
+            HorizontalLayout {
+                padding-left: 6px;
+                padding-right: 6px;
                 spacing: 0px;
 
                 HeaderCell {
@@ -636,178 +636,200 @@ export component MainWindow inherits Window {
                 height: parent.height;
 
                 VerticalLayout {
+                    alignment: start;
                     spacing: 0px;
 
-                    for entry[idx] in root.entries : Rectangle {
+                    for entry[idx] in root.entries : row-touch := TouchArea {
                         height: 26px;
+                        width: 100%;
 
-                        row-touch := TouchArea {
-                            moved => {
-                                if (self.pressed) {
-                                    let dx = self.mouse-x - self.pressed-x;
-                                    let dy = self.mouse-y - self.pressed-y;
-                                    if (dx > 6px || dx < -6px || dy > 6px || dy < -6px) {
-                                        root.start-drag(idx);
-                                    }
-                                }
+                        property <bool> is-dragging-row: false;
+                        property <length> press-x;
+                        property <length> press-y;
+
+                        pointer-event(event) => {
+                            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                self.press-x = self.mouse-x;
+                                self.press-y = self.mouse-y;
+                                self.is-dragging-row = false;
                             }
-                            clicked => {
-                                root.active-menu = 0;
-                                root.select-entry(idx);
-                                if (entry.is-dir) {
-                                    root.open-entry(entry.name);
+                            if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                                self.is-dragging-row = false;
+                            }
+                        }
+
+                        moved => {
+                            if (self.pressed && !self.is-dragging-row) {
+                                let dx = self.mouse-x - self.press-x;
+                                let dy = self.mouse-y - self.press-y;
+                                if (dx > 5px || dx < -5px || dy > 5px || dy < -5px) {
+                                    self.is-dragging-row = true;
+                                    root.start-drag(idx);
                                 }
                             }
                         }
 
-                        // Neutral grey selection highlight matching the reference image!
-                        background: entry.is-selected
-                            ? (root.dark-mode ? #363636 : #d8e2ec)
-                            : (row-touch.has-hover ? (root.dark-mode ? #242424 : #f2f4f7) : transparent);
-
-                        border-width: entry.is-selected ? 1px : 0px;
-                        border-color: root.dark-mode ? #4a4a4a : #b0c4de;
-
-                        HorizontalBox {
-                            padding-left: 6px;
-                            padding-right: 6px;
-                            spacing: 0px;
-
-                            // Column 1: Icon + Name
-                            Rectangle {
-                                width: 38%;
-                                height: parent.height;
-                                clip: true;
-
-                                Image {
-                                    source: entry.icon-kind == "dir"
-                                        ? @image-url("../assets/icons/folder.svg")
-                                        : (entry.icon-kind == "exe"
-                                            ? @image-url("../assets/icons/file-exe.svg")
-                                            : (entry.icon-kind == "txt"
-                                                ? @image-url("../assets/icons/file-txt.svg")
-                                                : (entry.icon-kind == "dll"
-                                                    ? @image-url("../assets/icons/file-dll.svg")
-                                                    : @image-url("../assets/icons/file.svg"))));
-                                    x: 4px;
-                                    y: 5px;
-                                    width: 16px;
-                                    height: 16px;
-                                    image-fit: contain;
-                                }
-
-                                Text {
-                                    text: entry.name;
-                                    x: 26px;
-                                    y: 0px;
-                                    width: parent.width - 30px;
-                                    height: parent.height;
-                                    color: entry.is-selected
-                                        ? #ffffff
-                                        : (root.dark-mode ? #e0e0e0 : #1e1e1e);
-                                    font-size: 12px;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                }
+                        clicked => {
+                            root.active-menu = 0;
+                            root.select-entry(idx);
+                            if (entry.is-dir) {
+                                root.open-entry(entry.name);
                             }
+                        }
 
-                            // Column 2: Size
-                            Rectangle {
-                                width: 13%;
-                                height: parent.height;
-                                clip: true;
-                                Text {
-                                    text: entry.size;
-                                    x: 8px;
-                                    y: 0px;
-                                    width: parent.width - 16px;
+                        Rectangle {
+                            width: 100%;
+                            height: 100%;
+
+                            // Neutral grey selection highlight matching the reference image!
+                            background: entry.is-selected
+                                ? (root.dark-mode ? #363636 : #d8e2ec)
+                                : (row-touch.has-hover ? (root.dark-mode ? #242424 : #f2f4f7) : transparent);
+
+                            border-width: entry.is-selected ? 1px : 0px;
+                            border-color: root.dark-mode ? #4a4a4a : #b0c4de;
+
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                spacing: 0px;
+
+                                // Column 1: Icon + Name
+                                Rectangle {
+                                    width: 38%;
                                     height: parent.height;
-                                    color: entry.is-selected
-                                        ? #ffffff
-                                        : (root.dark-mode ? #999999 : #555555);
-                                    font-size: 11.5px;
-                                    vertical-alignment: center;
-                                    overflow: elide;
+                                    clip: true;
+
+                                    Image {
+                                        source: entry.icon-kind == "dir"
+                                            ? @image-url("../assets/icons/folder.svg")
+                                            : (entry.icon-kind == "exe"
+                                                ? @image-url("../assets/icons/file-exe.svg")
+                                                : (entry.icon-kind == "txt"
+                                                    ? @image-url("../assets/icons/file-txt.svg")
+                                                    : (entry.icon-kind == "dll"
+                                                        ? @image-url("../assets/icons/file-dll.svg")
+                                                        : @image-url("../assets/icons/file.svg"))));
+                                        x: 4px;
+                                        y: 5px;
+                                        width: 16px;
+                                        height: 16px;
+                                        image-fit: contain;
+                                    }
+
+                                    Text {
+                                        text: entry.name;
+                                        x: 26px;
+                                        y: 0px;
+                                        width: parent.width - 30px;
+                                        height: parent.height;
+                                        color: entry.is-selected
+                                            ? #ffffff
+                                            : (root.dark-mode ? #e0e0e0 : #1e1e1e);
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
                                 }
-                            }
 
-                            // Column 3: Packed
-                            Rectangle {
-                                width: 13%;
-                                height: parent.height;
-                                clip: true;
-                                Text {
-                                    text: entry.packed;
-                                    x: 8px;
-                                    y: 0px;
-                                    width: parent.width - 16px;
+                                // Column 2: Size
+                                Rectangle {
+                                    width: 13%;
                                     height: parent.height;
-                                    color: entry.is-selected
-                                        ? #ffffff
-                                        : (root.dark-mode ? #999999 : #555555);
-                                    font-size: 11.5px;
-                                    vertical-alignment: center;
-                                    overflow: elide;
+                                    clip: true;
+                                    Text {
+                                        text: entry.size;
+                                        x: 8px;
+                                        y: 0px;
+                                        width: parent.width - 16px;
+                                        height: parent.height;
+                                        color: entry.is-selected
+                                            ? #ffffff
+                                            : (root.dark-mode ? #999999 : #555555);
+                                        font-size: 11.5px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
                                 }
-                            }
 
-                            // Column 4: Type
-                            Rectangle {
-                                width: 14%;
-                                height: parent.height;
-                                clip: true;
-                                Text {
-                                    text: entry.entry-type;
-                                    x: 8px;
-                                    y: 0px;
-                                    width: parent.width - 16px;
+                                // Column 3: Packed
+                                Rectangle {
+                                    width: 13%;
                                     height: parent.height;
-                                    color: entry.is-selected
-                                        ? #ffffff
-                                        : (root.dark-mode ? #999999 : #555555);
-                                    font-size: 11.5px;
-                                    vertical-alignment: center;
-                                    overflow: elide;
+                                    clip: true;
+                                    Text {
+                                        text: entry.packed;
+                                        x: 8px;
+                                        y: 0px;
+                                        width: parent.width - 16px;
+                                        height: parent.height;
+                                        color: entry.is-selected
+                                            ? #ffffff
+                                            : (root.dark-mode ? #999999 : #555555);
+                                        font-size: 11.5px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
                                 }
-                            }
 
-                            // Column 5: Modified
-                            Rectangle {
-                                width: 14%;
-                                height: parent.height;
-                                clip: true;
-                                Text {
-                                    text: entry.modified;
-                                    x: 8px;
-                                    y: 0px;
-                                    width: parent.width - 16px;
+                                // Column 4: Type
+                                Rectangle {
+                                    width: 14%;
                                     height: parent.height;
-                                    color: entry.is-selected
-                                        ? #ffffff
-                                        : (root.dark-mode ? #999999 : #555555);
-                                    font-size: 11.5px;
-                                    vertical-alignment: center;
-                                    overflow: elide;
+                                    clip: true;
+                                    Text {
+                                        text: entry.entry-type;
+                                        x: 8px;
+                                        y: 0px;
+                                        width: parent.width - 16px;
+                                        height: parent.height;
+                                        color: entry.is-selected
+                                            ? #ffffff
+                                            : (root.dark-mode ? #999999 : #555555);
+                                        font-size: 11.5px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
                                 }
-                            }
 
-                            // Column 6: CRC32
-                            Rectangle {
-                                horizontal-stretch: 1;
-                                height: parent.height;
-                                clip: true;
-                                Text {
-                                    text: entry.crc32;
-                                    x: 8px;
-                                    y: 0px;
-                                    width: parent.width - 16px;
+                                // Column 5: Modified
+                                Rectangle {
+                                    width: 14%;
                                     height: parent.height;
-                                    color: entry.is-selected
-                                        ? #ffffff
-                                        : (root.dark-mode ? #999999 : #555555);
-                                    font-size: 11.5px;
-                                    vertical-alignment: center;
-                                    overflow: elide;
+                                    clip: true;
+                                    Text {
+                                        text: entry.modified;
+                                        x: 8px;
+                                        y: 0px;
+                                        width: parent.width - 16px;
+                                        height: parent.height;
+                                        color: entry.is-selected
+                                            ? #ffffff
+                                            : (root.dark-mode ? #999999 : #555555);
+                                        font-size: 11.5px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                // Column 6: CRC32
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    height: parent.height;
+                                    clip: true;
+                                    Text {
+                                        text: entry.crc32;
+                                        x: 8px;
+                                        y: 0px;
+                                        width: parent.width - 16px;
+                                        height: parent.height;
+                                        color: entry.is-selected
+                                            ? #ffffff
+                                            : (root.dark-mode ? #999999 : #555555);
+                                        font-size: 11.5px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
                                 }
                             }
                         }
