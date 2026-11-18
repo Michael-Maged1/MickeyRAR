@@ -251,6 +251,7 @@ export component MainWindow inherits Window {
     callback nav-up();
     callback select-entry(int);
     callback open-entry(string);
+    callback start-drag(int);
     callback save-compression-settings(string, bool);
     callback open-url(string);
     callback toolbar-info(string);
@@ -641,6 +642,15 @@ export component MainWindow inherits Window {
                         height: 26px;
 
                         row-touch := TouchArea {
+                            moved => {
+                                if (self.pressed) {
+                                    let dx = self.mouse-x - self.pressed-x;
+                                    let dy = self.mouse-y - self.pressed-y;
+                                    if (dx > 6px || dx < -6px || dy > 6px || dy < -6px) {
+                                        root.start-drag(idx);
+                                    }
+                                }
+                            }
                             clicked => {
                                 root.active-menu = 0;
                                 root.select-entry(idx);

@@ -4,9 +4,10 @@ mod i18n;
 use i18n::Language;
 mod engine;
 mod winicon;
+mod drag_drop;
 use engine::{CompressionSettings, RunOutcome, create_arguments, create_arguments_for_format, delete_file_with_retry, is_archive_encrypted, run_7z, run_7z_cancellable_with_progress, test_archive_password};
 use slint::{Model, ModelRc, VecModel, Timer, TimerMode};
-use std::{cell::RefCell, fs, path::{Path, PathBuf}, rc::Rc, sync::{mpsc, Arc, Mutex, atomic::{AtomicBool, AtomicU8, Ordering}}, thread, time::{Duration, Instant}};
+use std::{cell::{Cell, RefCell}, fs, path::{Path, PathBuf}, rc::Rc, sync::{mpsc, Arc, Mutex, atomic::{AtomicBool, AtomicU8, Ordering}}, thread, time::{Duration, Instant}};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -1584,6 +1585,135 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             else { ui.set_status(format!("Selected: {}", p.display()).into()); }
         }
       }); }
+
+    let is_dragging = Rc::new(Cell::new(false));
+    {
+        let weak = ui.as_weak();
+        let state = state.clone();
+        let is_dragging = is_dragging.clone();
+        ui.on_start_drag(move |idx| {
+            if is_dragging.get() { return; }
+            let Some(ui) = weak.upgrade() else { return; };
+            let model = ui.get_entries();
+            if idx < 0 || (idx as usize) >= model.row_count() { return; }
+            let Some(clicked_entry) = model.row_data(idx as usize) else { return; };
+            if clicked_entry.name == ".." { return; }
+
+            is_dragging.set(true);
+
+            let mut files_to_drag: Vec<String> = Vec::new();
+            if clicked_entry.is_selected {
+                for i in 0..model.row_count() {
+                    if let Some(entry) = model.row_data(i) {
+                        if entry.is_selected && entry.name != ".." {
+                            files_to_drag.push(entry.name.to_string());
+                        }
+                    }
+                }
+            }
+            if files_to_drag.is_empty() {
+                files_to_drag.push(clicked_entry.name.to_string());
+            }
+
+            let is_archive = state.borrow().archive.is_some();
+            let arabic = ui.get_arabic_mode();
+
+            if is_archive {
+                let archive_path = state.borrow().archive.clone().unwrap();
+                let mut password: Option<String> = None;
+                match resolve_archive_password(&archive_path, arabic).unwrap_or(None) {
+                    Some(ref s) if s == "__CANCELLED__" => {
+                        is_dragging.set(false);
+                        return;
+                    }
+                    Some(pwd) => password = Some(pwd),
+                    None => {}
+                }
+
+                let temp_dir = std::env::temp_dir().join("MickeyRAR_Drag");
+                let _ = std::fs::create_dir_all(&temp_dir);
+
+                let mut out_flag = std::ffi::OsString::from("-o");
+                out_flag.push(temp_dir.as_os_str());
+
+                let mut args = vec![
+                    std::ffi::OsString::from("x"),
+                    std::ffi::OsString::from("-y"),
+                    std::ffi::OsString::from("-aoa"),
+                    out_flag,
+                    archive_path.as_os_str().to_owned(),
+                ];
+                if let Some(ref pwd) = password {
+                    args.push(std::ffi::OsString::from(format!("-p{pwd}")));
+                }
+                for f in &files_to_drag {
+                    args.push(std::ffi::OsString::from(f));
+                }
+
+                ui.set_status(if arabic { "جاري تجهيز الملفات للسحب والإفلات..." } else { "Extracting files for drag and drop..." }.into());
+
+                match run_7z(&args, None) {
+                    Ok(_) => {
+                        let mut drag_paths: Vec<PathBuf> = Vec::new();
+                        for f in &files_to_drag {
+                            let p = temp_dir.join(f);
+                            if p.exists() {
+                                drag_paths.push(p);
+                            }
+                        }
+                        if !drag_paths.is_empty() {
+                            let path_refs: Vec<&Path> = drag_paths.iter().map(|p| p.as_path()).collect();
+                            #[cfg(windows)]
+                            {
+                                match drag_drop::windows::start_drag_drop_files(&path_refs) {
+                                    Ok(effect) => {
+                                        if effect != 0 {
+                                            ui.set_status(if arabic { "تم سحب وإفلات الملفات بنجاح ✔" } else { "Files dropped successfully ✔" }.into());
+                                        } else {
+                                            ui.set_status(if arabic { "تم إلغاء السحب والإفلات" } else { "Drag and drop cancelled" }.into());
+                                        }
+                                    }
+                                    Err(e) => {
+                                        ui.set_status(format!("Drag drop error: {e}").into());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        ui.set_status(format!("Drag extraction error: {e}").into());
+                    }
+                }
+            } else {
+                let current_dir = &state.borrow().folder;
+                let mut drag_paths: Vec<PathBuf> = Vec::new();
+                for f in &files_to_drag {
+                    let p = current_dir.join(f);
+                    if p.exists() {
+                        drag_paths.push(p);
+                    }
+                }
+                if !drag_paths.is_empty() {
+                    let path_refs: Vec<&Path> = drag_paths.iter().map(|p| p.as_path()).collect();
+                    #[cfg(windows)]
+                    {
+                        match drag_drop::windows::start_drag_drop_files(&path_refs) {
+                            Ok(effect) => {
+                                if effect != 0 {
+                                    ui.set_status(if arabic { "تم سحب وإفلات الملفات بنجاح ✔" } else { "Files dropped successfully ✔" }.into());
+                                }
+                            }
+                            Err(e) => {
+                                ui.set_status(format!("Drag drop error: {e}").into());
+                            }
+                        }
+                    }
+                }
+            }
+
+            is_dragging.set(false);
+        });
+    }
     { let weak = ui.as_weak(); let state = state.clone();
       ui.on_open_archive(move || {
         if let Some(p) = rfd::FileDialog::new().pick_file() {
