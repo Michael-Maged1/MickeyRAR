@@ -41,7 +41,7 @@ You can directly download the pre-compiled standalone Windows installer here:
 
 ## ✨ Features | المميزات
 
-* 🎨 **Windows 11 Fluent UI**: True black dark theme (`#191919`) with custom neon-green branding (`#8fd62e`), plus light mode toggle.
+* 🎨 **Windows 11 Fluent UI**: True black dark theme (`#191919`) with custom vibrant orange branding (`#E8573F`), plus light mode toggle.
 * 🖱️ **Windows Explorer Context Menu (قائمة كليك يمين)**:
   * **Extract Here (فك الضغط هنا)**: One-click instant extraction in the current directory.
   * **Extract to subfolder (استخراج إلى مجلد)**: Creates a dedicated folder named after the archive and extracts inside it.
@@ -71,7 +71,7 @@ You can directly download the pre-compiled standalone Windows installer here:
 
 ```text
 ├── assets/                     # Icons, window branding, and screenshots
-│   ├── icons/                 # Dark mode SVGs (brand green #8fd62e)
+│   ├── icons/                 # Dark mode SVGs (brand orange #E8573F)
 │   ├── icons-light/           # Light mode SVGs
 │   ├── icon.png               # High resolution app icon
 │   ├── screenshot-dark.png    # Modern dark mode interface capture

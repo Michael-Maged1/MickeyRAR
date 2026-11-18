@@ -1,9 +1,9 @@
-﻿<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
   <!-- Folder Outline -->
   <path d="M 8 16 C 8 13.5 9.5 12 11.5 12 L 18 12 C 19.5 12 21 13 22 14.5 L 23.5 16.5 L 38.5 16.5 C 40.5 16.5 42 18 42 20 L 42 34 C 42 36 40.5 37.5 38.5 37.5 L 9.5 37.5 C 7.5 37.5 6 36 6 34 L 6 18 C 6 16.5 7 16 8 16 Z"
         fill="none" stroke="#2b2d30" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" />
   <!-- Circular Badge at bottom right -->
-  <circle cx="34" cy="30" r="7.5" fill="#5e8a26" stroke="#f8fafc" stroke-width="1.8" />
+  <circle cx="34" cy="30" r="7.5" fill="#d44a33" stroke="#f8fafc" stroke-width="1.8" />
   <!-- Right Arrow -->
   <line x1="30.5" y1="30" x2="37.5" y2="30" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" />
   <polyline points="35,27.5 37.5,30 35,32.5" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />

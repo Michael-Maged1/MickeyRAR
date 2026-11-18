@@ -307,7 +307,7 @@ export component MainWindow inherits Window {
 
                     if root.dark-mode : Text {
                         text: "☼";
-                        color: #8fd62e;
+                        color: #e8573f;
                         font-size: 14px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -315,7 +315,7 @@ export component MainWindow inherits Window {
                     if !root.dark-mode : Path {
                         x: 9px; y: 5px; width: 12px; height: 12px;
                         commands: "M 10.5 6.4 A 4.5 4.5 0 1 1 5.6 1.5 A 3.5 3.5 0 0 0 10.5 6.4 Z";
-                        fill: #5e8a26;
+                        fill: #d44a33;
                     }
                 }
 
@@ -330,7 +330,7 @@ export component MainWindow inherits Window {
                     lang-btn := TouchArea { clicked => { root.active-menu = 0; root.toggle-language(); } }
                     Text {
                         text: root.arabic-mode ? "EN" : "AR";
-                        color: root.dark-mode ? #8fd62e : #5e8a26;
+                        color: root.dark-mode ? #e8573f : #d44a33;
                         font-size: 11px;
                         font-weight: 700;
                         horizontal-alignment: center;
@@ -340,7 +340,7 @@ export component MainWindow inherits Window {
             }
         }
 
-        // ---- Modern Toolbar (Neutral Charcoal / Black, exact icons with green badges) ----
+        // ---- Modern Toolbar (Neutral Charcoal / Black, exact icons with orange badges) ----
         Rectangle {
             height: 70px;
             background: root.dark-mode ? #202020 : #ffffff;
@@ -458,7 +458,7 @@ export component MainWindow inherits Window {
             height: 175px;
             background: root.dark-mode ? #222222 : #f5f6f8;
             border-width: 1px;
-            border-color: #8fd62e;
+            border-color: #e8573f;
 
             VerticalLayout {
                 padding: 12px;
@@ -467,7 +467,7 @@ export component MainWindow inherits Window {
                     text: root.arabic-mode ? "إعدادات ضغط Mickey RAR الفائق Ultra" : "Mickey RAR — Ultra Compression Settings";
                     font-weight: 700;
                     font-size: 13px;
-                    color: root.dark-mode ? #8fd62e : #4d7a18;
+                    color: root.dark-mode ? #e8573f : #d44a33;
                 }
                 Text {
                     text: root.arabic-mode ? "الصيغة: ZIP / 7Z   •   المستوى: Ultra (-mx=9)   •   الخوارزمية: LZMA2 / Deflate" : "Format: ZIP / 7Z   •   Level: Ultra (-mx=9)   •   Engine: LZMA2 / Deflate";
@@ -566,7 +566,7 @@ export component MainWindow inherits Window {
                         width: 9px;
                         height: 5px;
                         commands: "M 0 0 L 9 0 L 4.5 5 Z";
-                        fill: root.dark-mode ? #8fd62e : #5e8a26;
+                        fill: root.dark-mode ? #e8573f : #d44a33;
                     }
                 }
             }
@@ -872,7 +872,7 @@ export component MainWindow inherits Window {
                 // Right side: Total summary info
                 Text {
                     text: root.total-info;
-                    color: root.dark-mode ? #8fd62e : #4d7a18;
+                    color: root.dark-mode ? #e8573f : #d44a33;
                     font-size: 11px;
                     font-weight: 500;
                     vertical-alignment: center;

@@ -161,7 +161,7 @@ slint::slint! {
                             y: 0px;
                             width: parent.width * Math.min(1.0, Math.max(0.0, root.file-progress));
                             height: parent.height;
-                            background: #a7d63f;
+                            background: #e8573f;
                         }
                     }
                 }
@@ -256,7 +256,7 @@ slint::slint! {
                             y: 0px;
                             width: parent.width * Math.min(1.0, Math.max(0.0, root.total-progress));
                             height: parent.height;
-                            background: #a7d63f;
+                            background: #e8573f;
                         }
                     }
                 }
@@ -325,10 +325,10 @@ slint::slint! {
             Text { text: "Add to archive"; color: #f3f7f1; font-size: 20px; font-weight: 700; }
             Text { text: "Choose the archive name, location, format and compression level."; color: #aeb8ad; font-size: 12px; }
             Rectangle { height: 1px; background: #3a3a3a; }
-            HorizontalBox { spacing: 10px; Text { text: "Archive name:"; width: 125px; color: #dfe7dc; vertical-alignment: center; } LineEdit { text <=> root.archive-name; } }
-            HorizontalBox { spacing: 10px; Text { text: "Save location:"; width: 125px; color: #dfe7dc; vertical-alignment: center; } LineEdit { text <=> root.destination; } Button { text: "Browse..."; clicked => { root.browse-location(); } } }
-            HorizontalBox { spacing: 10px; Text { text: "Archive format:"; width: 125px; color: #dfe7dc; vertical-alignment: center; } ComboBox { model: ["ZIP", "7Z"]; current-index <=> root.format-index; } }
-            HorizontalBox { spacing: 10px; Text { text: "Compression level:"; width: 125px; color: #dfe7dc; vertical-alignment: center; } ComboBox { model: ["Store", "Fast", "Normal", "Maximum", "Ultra"]; current-index <=> root.level-index; } }
+            HorizontalBox { spacing: 10px; Text { text: "Archive name:"; width: 125px; color: #e2e2e2; vertical-alignment: center; } LineEdit { text <=> root.archive-name; } }
+            HorizontalBox { spacing: 10px; Text { text: "Save location:"; width: 125px; color: #e2e2e2; vertical-alignment: center; } LineEdit { text <=> root.destination; } Button { text: "Browse..."; clicked => { root.browse-location(); } } }
+            HorizontalBox { spacing: 10px; Text { text: "Archive format:"; width: 125px; color: #e2e2e2; vertical-alignment: center; } ComboBox { model: ["ZIP", "7Z"]; current-index <=> root.format-index; } }
+            HorizontalBox { spacing: 10px; Text { text: "Compression level:"; width: 125px; color: #e2e2e2; vertical-alignment: center; } ComboBox { model: ["Store", "Fast", "Normal", "Maximum", "Ultra"]; current-index <=> root.level-index; } }
             CheckBox { text: "Delete original files after successful compression"; checked <=> root.delete-original; }
             Rectangle { vertical-stretch: 1; }
             HorizontalBox { alignment: end; spacing: 8px; Button { text: "Cancel"; clicked => { root.cancel(); } } Button { text: "Create archive"; clicked => { root.start-compression(); } } }
@@ -340,7 +340,7 @@ slint::slint! {
         icon: @image-url("../assets/icon-window.png");
         width: 440px;
         height: 240px;
-        background: #202522;
+        background: #202020;
         forward-focus: pwd-input;
         in-out property <string> archive-name: "";
         in-out property <string> password: "";
@@ -362,7 +362,7 @@ slint::slint! {
                     width: 34px;
                     height: 34px;
                     border-radius: 7px;
-                    background: #a7d63f;
+                    background: #e8573f;
                     Image { source: @image-url("../assets/icon.png"); width: 34px; height: 34px; image-fit: contain; }
                 }
                 VerticalBox {
@@ -376,7 +376,7 @@ slint::slint! {
                     }
                     Text {
                         text: root.rtl ? "الملف محمي بكلمة مرور. أدخل كلمة المرور للمتابعة:" : "The archive is encrypted. Enter password to continue:";
-                        color: #b7c5b5;
+                        color: #aaaaaa;
                         font-size: 11px;
                     }
                 }
@@ -384,7 +384,7 @@ slint::slint! {
 
             if root.archive-name != "": Text {
                 text: root.archive-name;
-                color: #a7d63f;
+                color: #e8573f;
                 font-size: 12px;
                 font-weight: 600;
                 overflow: elide;

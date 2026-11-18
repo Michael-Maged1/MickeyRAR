@@ -34,7 +34,7 @@ slint! {
             width: 38px;
             height: 38px;
             border-radius: 9px;
-            background: #a7d63f;
+            background: #e8573f;
             Image { source: @image-url("../assets/icon.png"); width: 38px; height: 38px; image-fit: contain; }
         }
         Text { x: 68px; y: 20px; text: "Mickey RAR"; color: #f4f7ef; font-size: 20px; font-weight: 700; }
@@ -51,7 +51,7 @@ slint! {
                 width: root.progress * parent.width;
                 height: parent.height;
                 border-radius: 4px;
-                background: #a7d63f;
+                background: #e8573f;
             }
         }
     }
