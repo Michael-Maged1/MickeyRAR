@@ -61,6 +61,7 @@ const PROGRAM_BYTES: &[u8] = include_bytes!("../target/release/mickey-rar.exe");
 const SEVEN_ZIP_BYTES: &[u8] = include_bytes!("runtime/7z.exe");
 const SEVEN_ZIP_DLL_BYTES: &[u8] = include_bytes!("runtime/7z.dll");
 const UNINSTALLER_BYTES: &[u8] = include_bytes!("../target/release/mickey-rar-uninstaller.exe");
+const ICON_BYTES: &[u8] = include_bytes!("../assets/icon.ico");
 
 fn registry_value(key: &str, name: &str, value: &str) {
     let mut command = Command::new("reg.exe");
@@ -120,7 +121,7 @@ fn register_context_menu(executable: &PathBuf) {
         let verb_key = format!(r"{command_store}\{verb}");
         let command_key = format!(r"{verb_key}\command");
         registry_value(&verb_key, "", label);
-        registry_value(&verb_key, "Icon", &executable);
+        registry_value(&verb_key, "Icon", &format!("\"{executable}\",0"));
         let cmd = if flag.is_empty() {
             format!("\"{executable}\" \"%1\"")
         } else {
@@ -136,7 +137,7 @@ fn register_context_menu(executable: &PathBuf) {
     ] {
         registry_value(target, "MUIVerb", "Mickey RAR");
         registry_value(target, "SubCommands", "MickeyRAR.Open;MickeyRAR.ExtractHere;MickeyRAR.ExtractToFolder;MickeyRAR.ExtractTo;MickeyRAR.Add;MickeyRAR.Compress;MickeyRAR.Email");
-        registry_value(target, "Icon", &executable);
+        registry_value(target, "Icon", &format!("\"{executable}\",0"));
     }
 
     let prog_id = r"HKLM\Software\Classes\MickeyRAR.Archive";
@@ -212,17 +213,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let seven_zip = install_dir.join("7z.exe");
         let seven_zip_dll = install_dir.join("7z.dll");
         let uninstaller = install_dir.join("uninstall.exe");
+        let icon_file = install_dir.join("icon.ico");
         if fs::create_dir_all(&install_dir).is_err()
             || fs::write(&executable, PROGRAM_BYTES).is_err()
             || fs::write(&seven_zip, SEVEN_ZIP_BYTES).is_err()
             || fs::write(&seven_zip_dll, SEVEN_ZIP_DLL_BYTES).is_err()
             || fs::write(&uninstaller, UNINSTALLER_BYTES).is_err()
+            || fs::write(&icon_file, ICON_BYTES).is_err()
         {
             std::process::exit(1);
         }
         register_context_menu(&executable);
         register_uninstall(&install_dir, &executable, &uninstaller);
         create_desktop_shortcut(&executable);
+
+        #[cfg(windows)]
+        unsafe {
+            windows_sys::Win32::UI::Shell::SHChangeNotify(
+                windows_sys::Win32::UI::Shell::SHCNE_ASSOCCHANGED as i32,
+                windows_sys::Win32::UI::Shell::SHCNF_IDLIST,
+                std::ptr::null(),
+                std::ptr::null(),
+            );
+        }
+
         let _ = Command::new(&executable).spawn();
         std::process::exit(0);
     });

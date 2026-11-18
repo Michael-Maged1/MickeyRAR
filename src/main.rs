@@ -38,7 +38,7 @@ slint::slint! {
         in-out property <bool> enabled: true;
         callback clicked();
 
-        height: 28px;
+        height: 25px;
         border-radius: 4px;
         border-width: 1px;
         border-color: touch.has-hover ? #888888 : #555555;
@@ -52,7 +52,7 @@ slint::slint! {
         Text {
             text: root.text;
             color: root.enabled ? #e8e8e8 : #777777;
-            font-size: 12px;
+            font-size: 11.5px;
             font-weight: 500;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -64,8 +64,8 @@ slint::slint! {
             ? (root.archive-name != "" ? ("جاري الاستخراج من " + root.archive-name) : "Mickey RAR — جاري فك الضغط")
             : (root.archive-name != "" ? ("Extracting from " + root.archive-name) : "Mickey RAR — Extracting");
         icon: @image-url("../assets/icon-window.png");
-        width: 440px;
-        height: 380px;
+        width: 380px;
+        height: 310px;
         background: #1f1f1f;
 
         in-out property <string> archive-name: "";
@@ -89,11 +89,11 @@ slint::slint! {
         callback show-help();
 
         VerticalLayout {
-            padding-left: 14px;
-            padding-right: 14px;
-            padding-top: 12px;
-            padding-bottom: 12px;
-            spacing: 10px;
+            padding-left: 10px;
+            padding-right: 10px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            spacing: 6px;
 
             // Box 1: Current File Extraction (Top Box)
             Rectangle {
@@ -103,17 +103,17 @@ slint::slint! {
                 background: #202020;
 
                 VerticalLayout {
-                    padding-left: 10px;
-                    padding-right: 10px;
-                    padding-top: 8px;
-                    padding-bottom: 10px;
-                    spacing: 4px;
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 6px;
+                    padding-bottom: 7px;
+                    spacing: 3px;
 
                     // Archive Name
                     Text {
                         text: root.archive-name != "" ? root.archive-name : "Archive";
                         color: #f0f0f0;
-                        font-size: 13px;
+                        font-size: 11.5px;
                         font-weight: 600;
                         overflow: elide;
                         horizontal-alignment: root.rtl ? right : left;
@@ -123,7 +123,7 @@ slint::slint! {
                     Text {
                         text: root.action-text;
                         color: #aaaaaa;
-                        font-size: 11.5px;
+                        font-size: 11px;
                         horizontal-alignment: root.rtl ? right : left;
                     }
 
@@ -132,7 +132,7 @@ slint::slint! {
                         Text {
                             text: root.current-file != "" ? root.current-file : root.archive-name;
                             color: #ffffff;
-                            font-size: 12.5px;
+                            font-size: 11.5px;
                             overflow: elide;
                             horizontal-stretch: 1;
                             horizontal-alignment: root.rtl ? right : left;
@@ -140,7 +140,7 @@ slint::slint! {
                         Text {
                             text: root.file-percent + "%";
                             color: #ffffff;
-                            font-size: 12.5px;
+                            font-size: 11.5px;
                             font-weight: 600;
                             min-width: 38px;
                             horizontal-alignment: root.rtl ? left : right;
@@ -149,7 +149,7 @@ slint::slint! {
 
                     // Progress Bar 1
                     Rectangle {
-                        height: 14px;
+                        height: 12px;
                         background: #2b2b2b;
                         border-width: 1px;
                         border-color: #484848;
@@ -175,25 +175,25 @@ slint::slint! {
                 background: #202020;
 
                 VerticalLayout {
-                    padding-left: 10px;
-                    padding-right: 10px;
-                    padding-top: 8px;
-                    padding-bottom: 10px;
-                    spacing: 6px;
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 6px;
+                    padding-bottom: 7px;
+                    spacing: 4px;
 
                     // Elapsed Time Row
                     HorizontalLayout {
                         Text {
                             text: root.rtl ? "الوقت المنقضي" : "Elapsed time";
                             color: #dddddd;
-                            font-size: 12px;
+                            font-size: 11px;
                             horizontal-stretch: 1;
                             horizontal-alignment: root.rtl ? right : left;
                         }
                         Text {
                             text: root.elapsed-time;
                             color: #f0f0f0;
-                            font-size: 12px;
+                            font-size: 11px;
                             font-weight: 500;
                             horizontal-alignment: root.rtl ? left : right;
                         }
@@ -204,14 +204,14 @@ slint::slint! {
                         Text {
                             text: root.rtl ? "الوقت المتبقي" : "Time left";
                             color: #dddddd;
-                            font-size: 12px;
+                            font-size: 11px;
                             horizontal-stretch: 1;
                             horizontal-alignment: root.rtl ? right : left;
                         }
                         Text {
                             text: root.time-left;
                             color: #f0f0f0;
-                            font-size: 12px;
+                            font-size: 11px;
                             font-weight: 500;
                             horizontal-alignment: root.rtl ? left : right;
                         }
@@ -228,7 +228,7 @@ slint::slint! {
                         Text {
                             text: root.rtl ? "تمت المعالجة" : "Processed";
                             color: #dddddd;
-                            font-size: 12px;
+                            font-size: 11px;
                             font-weight: 600;
                             horizontal-stretch: 1;
                             horizontal-alignment: root.rtl ? right : left;
@@ -236,7 +236,7 @@ slint::slint! {
                         Text {
                             text: root.total-percent + "%";
                             color: #f0f0f0;
-                            font-size: 12px;
+                            font-size: 11.5px;
                             font-weight: 600;
                             horizontal-alignment: root.rtl ? left : right;
                         }
@@ -244,7 +244,7 @@ slint::slint! {
 
                     // Progress Bar 2 (Total Processed)
                     Rectangle {
-                        height: 14px;
+                        height: 12px;
                         background: #2b2b2b;
                         border-width: 1px;
                         border-color: #484848;
@@ -264,11 +264,11 @@ slint::slint! {
 
             // Bottom Buttons
             VerticalLayout {
-                spacing: 6px;
+                spacing: 5px;
 
                 // Row 1: Background & Pause
                 HorizontalLayout {
-                    spacing: 8px;
+                    spacing: 6px;
                     WinRarButton {
                         text: root.rtl ? "في الخلفية" : "Background";
                         horizontal-stretch: 1;
@@ -285,7 +285,7 @@ slint::slint! {
 
                 // Row 2: Cancel, Mode..., Help
                 HorizontalLayout {
-                    spacing: 8px;
+                    spacing: 6px;
                     WinRarButton {
                         text: root.rtl ? "إلغاء" : "Cancel";
                         horizontal-stretch: 1;
