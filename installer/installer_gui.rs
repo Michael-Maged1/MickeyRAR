@@ -120,6 +120,7 @@ fn register_context_menu(executable: &PathBuf) {
         let verb_key = format!(r"{command_store}\{verb}");
         let command_key = format!(r"{verb_key}\command");
         registry_value(&verb_key, "", label);
+        registry_value(&verb_key, "Icon", &executable);
         let cmd = if flag.is_empty() {
             format!("\"{executable}\" \"%1\"")
         } else {

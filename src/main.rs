@@ -87,11 +87,12 @@ slint::slint! {
     }
 
     export component PasswordDialog inherits Window {
-        title: "Mickey RAR";
+        title: root.rtl ? "فك ضغط ملف محمي" : "Enter Password";
         icon: @image-url("../assets/icon-window.png");
         width: 440px;
         height: 240px;
         background: #202522;
+        forward-focus: pwd-input;
         in-out property <string> archive-name: "";
         in-out property <string> password: "";
         in-out property <bool> show-password: false;
@@ -125,7 +126,7 @@ slint::slint! {
                         font-weight: 700;
                     }
                     Text {
-                        text: root.rtl ? "الأرشيف محمي بكلمة مرور. أدخل كلمة المرور للمتابعة:" : "The archive is encrypted. Enter password to continue:";
+                        text: root.rtl ? "الملف محمي بكلمة مرور. أدخل كلمة المرور للمتابعة:" : "The archive is encrypted. Enter password to continue:";
                         color: #b7c5b5;
                         font-size: 11px;
                     }
@@ -173,7 +174,7 @@ slint::slint! {
                     clicked => { root.cancel(); }
                 }
                 Button {
-                    text: root.rtl ? "موافق" : "OK";
+                    text: root.rtl ? "استخراج" : "OK";
                     clicked => { root.submit(); }
                 }
             }
@@ -259,6 +260,52 @@ fn cleanup_zero_byte_files(dir: &Path) {
     }
 }
 
+const COMMON_DEFAULT_PASSWORDS: &[&str] = &[
+    "",
+    "0000",
+    "1234",
+    "123456",
+    "123",
+];
+
+fn resolve_archive_password(
+    archive: &Path,
+    arabic: bool,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    if !is_archive_encrypted(archive) {
+        return Ok(None);
+    }
+
+    // 1. Silently try common known default/blank passwords
+    for &cand in COMMON_DEFAULT_PASSWORDS {
+        if test_archive_password(archive, cand) {
+            return Ok(if cand.is_empty() { None } else { Some(cand.to_string()) });
+        }
+    }
+
+    // 2. Archive requires a specific password; prompt the user
+    let name = archive.file_name().unwrap_or_default().to_string_lossy();
+    let mut err: Option<&str> = None;
+    loop {
+        match prompt_for_password(&name, arabic, err)? {
+            Some(pwd) => {
+                if test_archive_password(archive, &pwd) {
+                    return Ok(Some(pwd));
+                } else {
+                    err = Some(if arabic {
+                        "كلمة المرور غير صحيحة، يرجى إعادة المحاولة"
+                    } else {
+                        "Incorrect password, please try again"
+                    });
+                }
+            }
+            None => {
+                return Ok(Some("__CANCELLED__".to_string()));
+            }
+        }
+    }
+}
+
 fn run_context_extraction_with_options(
     paths: Vec<PathBuf>,
     target_dir: Option<PathBuf>,
@@ -269,31 +316,19 @@ fn run_context_extraction_with_options(
     let archives: Vec<PathBuf> = paths.into_iter().filter(|p| p.is_file()).collect();
     if archives.is_empty() { return Err("Selected file does not exist".into()); }
 
-    // Prompt for password if any archive is encrypted
+    // Resolve password if any archive is encrypted
     let mut password: Option<String> = None;
     for archive in &archives {
         let abs_archive = if archive.is_absolute() { archive.clone() } else {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(archive)
         };
-        if is_archive_encrypted(&abs_archive) {
-            let name = abs_archive.file_name().unwrap_or_default().to_string_lossy();
-            let mut err: Option<&str> = None;
-            loop {
-                match prompt_for_password(&name, arabic, err)? {
-                    Some(pwd) => {
-                        if test_archive_password(&abs_archive, &pwd) {
-                            password = Some(pwd);
-                            break;
-                        } else {
-                            err = Some(if arabic { "كلمة المرور غير صحيحة، يرجى إعادة المحاولة" } else { "Incorrect password, please try again" });
-                        }
-                    }
-                    None => {
-                        return Ok(());
-                    }
-                }
+        match resolve_archive_password(&abs_archive, arabic)? {
+            Some(ref p) if p == "__CANCELLED__" => return Ok(()),
+            Some(pwd) => {
+                password = Some(pwd);
+                break;
             }
-            break;
+            None => {}
         }
     }
 
@@ -681,7 +716,7 @@ fn language_path() -> PathBuf {
 fn load_language() -> Language {
     fs::read_to_string(language_path())
         .map(|s| Language::from_code(&s))
-        .unwrap_or_else(|_| Language::English)
+        .unwrap_or_else(|_| Language::Arabic)
 }
 fn save_language(lang: Language) -> Result<(), String> {
     fs::write(language_path(), lang.code()).map_err(|e| e.to_string())
@@ -1195,27 +1230,15 @@ fn run_in_app_extraction(
     main_ui: slint::Weak<MainWindow>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut password: Option<String> = None;
-    if is_archive_encrypted(&archive) {
-        let a_name = archive.file_name().unwrap_or_default().to_string_lossy();
-        let mut err: Option<&str> = None;
-        loop {
-            match prompt_for_password(&a_name, arabic, err)? {
-                Some(pwd) => {
-                    if test_archive_password(&archive, &pwd) {
-                        password = Some(pwd);
-                        break;
-                    } else {
-                        err = Some(if arabic { "كلمة المرور غير صحيحة، يرجى إعادة المحاولة" } else { "Incorrect password, please try again" });
-                    }
-                }
-                None => {
-                    if let Some(m) = main_ui.upgrade() {
-                        m.set_status(if arabic { "تم إلغاء فك الضغط" } else { "Extraction cancelled" }.into());
-                    }
-                    return Ok(());
-                }
+    match resolve_archive_password(&archive, arabic)? {
+        Some(ref p) if p == "__CANCELLED__" => {
+            if let Some(m) = main_ui.upgrade() {
+                m.set_status(if arabic { "تم إلغاء فك الضغط" } else { "Extraction cancelled" }.into());
             }
+            return Ok(());
         }
+        Some(pwd) => password = Some(pwd),
+        None => {}
     }
 
     let progress_ui = ProgressWindow::new()?;
@@ -1618,22 +1641,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .or_else(|| rfd::FileDialog::new().pick_file());
         if let Some(p) = selected { if let Some(ui) = weak.upgrade() {
             let mut pwd_opt = None;
-            if is_archive_encrypted(&p) {
-                let a_name = p.file_name().unwrap_or_default().to_string_lossy();
-                let mut err: Option<&str> = None;
-                loop {
-                    match prompt_for_password(&a_name, ui.get_arabic_mode(), err) {
-                        Ok(Some(pwd)) => {
-                            if test_archive_password(&p, &pwd) {
-                                pwd_opt = Some(pwd);
-                                break;
-                            } else {
-                                err = Some(if ui.get_arabic_mode() { "كلمة المرور غير صحيحة، يرجى إعادة المحاولة" } else { "Incorrect password, please try again" });
-                            }
-                        }
-                        _ => return,
-                    }
-                }
+            match resolve_archive_password(&p, ui.get_arabic_mode()).unwrap_or(None) {
+                Some(ref s) if s == "__CANCELLED__" => return,
+                Some(pwd) => pwd_opt = Some(pwd),
+                None => {}
             }
             let mut test_args: Vec<&std::ffi::OsStr> = vec!["t".as_ref(), p.as_os_str()];
             let pwd_arg = pwd_opt.as_ref().map(|s| format!("-p{s}"));
@@ -1715,22 +1726,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if is_archive {
                     let archive_path = state.borrow().archive.clone().unwrap();
                     let mut password: Option<String> = None;
-                    if is_archive_encrypted(&archive_path) {
-                        let a_name = archive_path.file_name().unwrap_or_default().to_string_lossy();
-                        let mut err: Option<&str> = None;
-                        loop {
-                            match prompt_for_password(&a_name, ui.get_arabic_mode(), err) {
-                                Ok(Some(pwd)) => {
-                                    if test_archive_password(&archive_path, &pwd) {
-                                        password = Some(pwd);
-                                        break;
-                                    } else {
-                                        err = Some(if ui.get_arabic_mode() { "كلمة المرور غير صحيحة، يرجى إعادة المحاولة" } else { "Incorrect password, please try again" });
-                                    }
-                                }
-                                _ => return,
-                            }
-                        }
+                    match resolve_archive_password(&archive_path, ui.get_arabic_mode()).unwrap_or(None) {
+                        Some(ref s) if s == "__CANCELLED__" => return,
+                        Some(pwd) => password = Some(pwd),
+                        None => {}
                     }
                     let temp_dir = std::env::temp_dir().join("MickeyRAR_View");
                     let _ = std::fs::create_dir_all(&temp_dir);
