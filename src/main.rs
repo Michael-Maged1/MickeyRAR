@@ -5,9 +5,9 @@ use i18n::Language;
 mod engine;
 mod winicon;
 mod drag_drop;
-use engine::{CompressionSettings, RunOutcome, create_arguments, create_arguments_for_format, delete_file_with_retry, is_archive_encrypted, run_7z, run_7z_cancellable_with_progress, test_archive_password};
+use engine::{CompressionSettings, ProgressHandle, RunOutcome, create_arguments, create_arguments_for_format, delete_file_with_retry, is_archive_encrypted, run_7z, run_7z_cancellable_with_progress, test_archive_password};
 use slint::{Model, ModelRc, VecModel, Timer, TimerMode};
-use std::{cell::{Cell, RefCell}, fs, path::{Path, PathBuf}, rc::Rc, sync::{mpsc, Arc, Mutex, atomic::{AtomicBool, AtomicU8, Ordering}}, thread, time::{Duration, Instant}};
+use std::{cell::{Cell, RefCell}, fs, path::{Path, PathBuf}, rc::Rc, sync::{mpsc, Arc, Mutex, atomic::{AtomicBool, Ordering}}, thread, time::{Duration, Instant}};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -33,27 +33,275 @@ fn center_window(_window: &slint::Window) {}
 slint::slint! {
     import { Button, LineEdit, CheckBox, ComboBox, VerticalBox, HorizontalBox } from "std-widgets.slint";
 
+    component WinRarButton inherits Rectangle {
+        in-out property <string> text;
+        in-out property <bool> enabled: true;
+        callback clicked();
+
+        height: 28px;
+        border-radius: 4px;
+        border-width: 1px;
+        border-color: touch.has-hover ? #888888 : #555555;
+        background: touch.pressed ? #1c1c1c : (touch.has-hover ? #383838 : #2b2b2b);
+
+        touch := TouchArea {
+            enabled <=> root.enabled;
+            clicked => { root.clicked(); }
+        }
+
+        Text {
+            text: root.text;
+            color: root.enabled ? #e8e8e8 : #777777;
+            font-size: 12px;
+            font-weight: 500;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
     export component ProgressWindow inherits Window {
-        title: "Mickey RAR";
+        title: root.rtl
+            ? (root.archive-name != "" ? ("جاري الاستخراج من " + root.archive-name) : "Mickey RAR — جاري فك الضغط")
+            : (root.archive-name != "" ? ("Extracting from " + root.archive-name) : "Mickey RAR — Extracting");
         icon: @image-url("../assets/icon-window.png");
-        width: 390px;
-        height: 132px;
-        background: #202522;
+        width: 440px;
+        height: 380px;
+        background: #1f1f1f;
+
+        in-out property <string> archive-name: "";
+        in-out property <string> current-file: "";
+        in-out property <string> action-text: root.rtl ? "جاري استخراج" : "extracting";
         in-out property <float> progress: 0.0;
+        in-out property <float> file-progress: root.progress;
+        in-out property <int> file-percent: Math.round(Math.min(1.0, Math.max(0.0, root.file-progress)) * 100);
+        in-out property <float> total-progress: root.progress;
+        in-out property <int> total-percent: Math.round(Math.min(1.0, Math.max(0.0, root.total-progress)) * 100);
+        in-out property <string> elapsed-time: "00:00:00";
+        in-out property <string> time-left: "--:--:--";
         in-out property <string> message: "Processing...";
         in-out property <bool> rtl: false;
-        Rectangle { x: 18px; y: 18px; width: 34px; height: 34px; border-radius: 7px; background: #a7d63f;
-            Image { source: @image-url("../assets/icon.png"); width: 34px; height: 34px; image-fit: contain; }
-        }
-        Text { x: 64px; y: 19px; text: "Mickey RAR"; color: #f3f7f1; font-size: 18px; font-weight: 700; }
-        Text { x: 64px; y: 46px; text: root.message; color: #b7c5b5; font-size: 11px; }
-        Rectangle { x: 18px; y: 94px; width: parent.width - 36px; height: 8px; border-radius: 4px; background: #343b36;
+        in-out property <bool> is-paused: false;
+
+        callback cancel();
+        callback toggle-background();
+        callback toggle-pause();
+        callback show-mode();
+        callback show-help();
+
+        VerticalLayout {
+            padding-left: 14px;
+            padding-right: 14px;
+            padding-top: 12px;
+            padding-bottom: 12px;
+            spacing: 10px;
+
+            // Box 1: Current File Extraction (Top Box)
             Rectangle {
-                x: root.rtl ? (parent.width - root.progress * parent.width) : 0px;
-                width: root.progress * parent.width;
-                height: parent.height;
-                border-radius: 4px;
-                background: #a7d63f;
+                border-width: 1px;
+                border-color: #4a4a4a;
+                border-radius: 2px;
+                background: #202020;
+
+                VerticalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    padding-top: 8px;
+                    padding-bottom: 10px;
+                    spacing: 4px;
+
+                    // Archive Name
+                    Text {
+                        text: root.archive-name != "" ? root.archive-name : "Archive";
+                        color: #f0f0f0;
+                        font-size: 13px;
+                        font-weight: 600;
+                        overflow: elide;
+                        horizontal-alignment: root.rtl ? right : left;
+                    }
+
+                    // Action Label
+                    Text {
+                        text: root.action-text;
+                        color: #aaaaaa;
+                        font-size: 11.5px;
+                        horizontal-alignment: root.rtl ? right : left;
+                    }
+
+                    // Current file + file percentage
+                    HorizontalLayout {
+                        Text {
+                            text: root.current-file != "" ? root.current-file : root.archive-name;
+                            color: #ffffff;
+                            font-size: 12.5px;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                            horizontal-alignment: root.rtl ? right : left;
+                        }
+                        Text {
+                            text: root.file-percent + "%";
+                            color: #ffffff;
+                            font-size: 12.5px;
+                            font-weight: 600;
+                            min-width: 38px;
+                            horizontal-alignment: root.rtl ? left : right;
+                        }
+                    }
+
+                    // Progress Bar 1
+                    Rectangle {
+                        height: 14px;
+                        background: #2b2b2b;
+                        border-width: 1px;
+                        border-color: #484848;
+                        border-radius: 2px;
+                        clip: true;
+
+                        Rectangle {
+                            x: root.rtl ? (parent.width - self.width) : 0px;
+                            y: 0px;
+                            width: parent.width * Math.min(1.0, Math.max(0.0, root.file-progress));
+                            height: parent.height;
+                            background: #a7d63f;
+                        }
+                    }
+                }
+            }
+
+            // Box 2: Time Stats and Total Processed (Middle Box)
+            Rectangle {
+                border-width: 1px;
+                border-color: #4a4a4a;
+                border-radius: 2px;
+                background: #202020;
+
+                VerticalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    padding-top: 8px;
+                    padding-bottom: 10px;
+                    spacing: 6px;
+
+                    // Elapsed Time Row
+                    HorizontalLayout {
+                        Text {
+                            text: root.rtl ? "الوقت المنقضي" : "Elapsed time";
+                            color: #dddddd;
+                            font-size: 12px;
+                            horizontal-stretch: 1;
+                            horizontal-alignment: root.rtl ? right : left;
+                        }
+                        Text {
+                            text: root.elapsed-time;
+                            color: #f0f0f0;
+                            font-size: 12px;
+                            font-weight: 500;
+                            horizontal-alignment: root.rtl ? left : right;
+                        }
+                    }
+
+                    // Time Left Row
+                    HorizontalLayout {
+                        Text {
+                            text: root.rtl ? "الوقت المتبقي" : "Time left";
+                            color: #dddddd;
+                            font-size: 12px;
+                            horizontal-stretch: 1;
+                            horizontal-alignment: root.rtl ? right : left;
+                        }
+                        Text {
+                            text: root.time-left;
+                            color: #f0f0f0;
+                            font-size: 12px;
+                            font-weight: 500;
+                            horizontal-alignment: root.rtl ? left : right;
+                        }
+                    }
+
+                    // Thin Divider
+                    Rectangle {
+                        height: 1px;
+                        background: #363636;
+                    }
+
+                    // Processed Row
+                    HorizontalLayout {
+                        Text {
+                            text: root.rtl ? "تمت المعالجة" : "Processed";
+                            color: #dddddd;
+                            font-size: 12px;
+                            font-weight: 600;
+                            horizontal-stretch: 1;
+                            horizontal-alignment: root.rtl ? right : left;
+                        }
+                        Text {
+                            text: root.total-percent + "%";
+                            color: #f0f0f0;
+                            font-size: 12px;
+                            font-weight: 600;
+                            horizontal-alignment: root.rtl ? left : right;
+                        }
+                    }
+
+                    // Progress Bar 2 (Total Processed)
+                    Rectangle {
+                        height: 14px;
+                        background: #2b2b2b;
+                        border-width: 1px;
+                        border-color: #484848;
+                        border-radius: 2px;
+                        clip: true;
+
+                        Rectangle {
+                            x: root.rtl ? (parent.width - self.width) : 0px;
+                            y: 0px;
+                            width: parent.width * Math.min(1.0, Math.max(0.0, root.total-progress));
+                            height: parent.height;
+                            background: #a7d63f;
+                        }
+                    }
+                }
+            }
+
+            // Bottom Buttons
+            VerticalLayout {
+                spacing: 6px;
+
+                // Row 1: Background & Pause
+                HorizontalLayout {
+                    spacing: 8px;
+                    WinRarButton {
+                        text: root.rtl ? "في الخلفية" : "Background";
+                        horizontal-stretch: 1;
+                        clicked => { root.toggle-background(); }
+                    }
+                    WinRarButton {
+                        text: root.is-paused
+                            ? (root.rtl ? "استئناف" : "Resume")
+                            : (root.rtl ? "إيقاف مؤقت" : "Pause");
+                        horizontal-stretch: 1;
+                        clicked => { root.toggle-pause(); }
+                    }
+                }
+
+                // Row 2: Cancel, Mode..., Help
+                HorizontalLayout {
+                    spacing: 8px;
+                    WinRarButton {
+                        text: root.rtl ? "إلغاء" : "Cancel";
+                        horizontal-stretch: 1;
+                        clicked => { root.cancel(); }
+                    }
+                    WinRarButton {
+                        text: root.rtl ? "الوضع..." : "Mode...";
+                        horizontal-stretch: 1;
+                        clicked => { root.show-mode(); }
+                    }
+                    WinRarButton {
+                        text: root.rtl ? "مساعدة" : "Help";
+                        horizontal-stretch: 1;
+                        clicked => { root.show-help(); }
+                    }
+                }
             }
         }
     }
@@ -344,16 +592,46 @@ fn run_context_extraction_with_options(
         winicon::install();
     });
 
-    let first_name = archives[0].file_name().unwrap_or_default().to_string_lossy();
-    ui.set_message(if arabic { format!("جاري فك ضغط {first_name}...").into() } else { format!("Extracting {first_name}...").into() });
+    let first_name = archives[0].file_name().unwrap_or_default().to_string_lossy().to_string();
+    ui.set_archive_name(first_name.clone().into());
+    ui.set_current_file(first_name.clone().into());
+    ui.set_action_text(if arabic { "جاري استخراج" } else { "extracting" }.into());
 
     let cancelled = Arc::new(AtomicBool::new(false));
-    let progress_handle = Arc::new(AtomicU8::new(0));
+    let progress_handle = ProgressHandle::new();
     let worker_cancelled = cancelled.clone();
     let worker_progress = progress_handle.clone();
     let worker_done = Arc::new(AtomicBool::new(false));
     let worker_finished = worker_done.clone();
     let (sender, receiver) = mpsc::channel();
+
+    let cancel_flag = cancelled.clone();
+    let cancel_weak = ui.as_weak();
+    ui.on_cancel(move || {
+        cancel_flag.store(true, Ordering::SeqCst);
+        if let Some(ui) = cancel_weak.upgrade() {
+            let _ = ui.hide();
+        }
+    });
+
+    let bg_weak = ui.as_weak();
+    ui.on_toggle_background(move || {
+        if let Some(ui) = bg_weak.upgrade() {
+            let _ = ui.hide();
+        }
+    });
+
+    let pause_weak = ui.as_weak();
+    ui.on_toggle_pause(move || {
+        if let Some(ui) = pause_weak.upgrade() {
+            ui.set_is_paused(!ui.get_is_paused());
+        }
+    });
+
+    ui.on_show_mode(|| {});
+    ui.on_show_help(|| {
+        let _ = webbrowser::open("https://github.com/Michael-Maged1/MickeyRAR");
+    });
 
     let archives_worker = archives.clone();
     let password_worker = password.clone();
@@ -402,7 +680,7 @@ fn run_context_extraction_with_options(
                 return;
             }
         }
-        worker_progress.store(100, Ordering::Relaxed);
+        worker_progress.percent.store(100, Ordering::Relaxed);
         worker_finished.store(true, Ordering::SeqCst);
         let _ = sender.send(Ok(RunOutcome::Finished));
     });
@@ -425,6 +703,7 @@ fn run_context_extraction_with_options(
     let weak = ui.as_weak();
     let timer_receiver = Arc::new(Mutex::new(receiver));
     let timer_progress = progress_handle.clone();
+    let start_time = Instant::now();
     let timer = Timer::default();
     let mut shown_percent = u8::MAX;
     // Keeps the auto-close timer alive until it fires.
@@ -432,18 +711,35 @@ fn run_context_extraction_with_options(
 
     timer.start(TimerMode::Repeated, Duration::from_millis(80), move || {
         if let Some(ui) = weak.upgrade() {
-            let percent = timer_progress.load(Ordering::Relaxed);
+            let percent = timer_progress.percent.load(Ordering::Relaxed);
+            let cur_file = timer_progress.current_file.lock().map(|l| l.clone()).unwrap_or_default();
+            if !cur_file.is_empty() {
+                ui.set_current_file(cur_file.into());
+            }
+
+            let elapsed_secs = start_time.elapsed().as_secs();
+            let elapsed_str = format!("{:02}:{:02}:{:02}", elapsed_secs / 3600, (elapsed_secs % 3600) / 60, elapsed_secs % 60);
+            ui.set_elapsed_time(elapsed_str.into());
+
+            if percent > 0 && percent < 100 {
+                let total_est = (elapsed_secs as f64) / (percent as f64 / 100.0);
+                let rem_secs = (total_est - elapsed_secs as f64).max(0.0) as u64;
+                let rem_str = format!("{:02}:{:02}:{:02}", rem_secs / 3600, (rem_secs % 3600) / 60, rem_secs % 60);
+                ui.set_time_left(rem_str.into());
+            } else if percent >= 100 {
+                ui.set_time_left("00:00:00".into());
+            } else {
+                ui.set_time_left("--:--:--".into());
+            }
+
             ui.set_progress(percent as f32 / 100.0);
+            ui.set_file_progress(percent as f32 / 100.0);
+            ui.set_file_percent(percent as i32);
+            ui.set_total_progress(percent as f32 / 100.0);
+            ui.set_total_percent(percent as i32);
+
             if percent != shown_percent {
                 shown_percent = percent;
-                let text = if percent == 0 {
-                    if arabic { "جاري فك الضغط...".to_string() } else { "Extracting files...".to_string() }
-                } else if arabic {
-                    format!("جاري فك الضغط... {percent}%")
-                } else {
-                    format!("Extracting files... {percent}%")
-                };
-                ui.set_message(text.into());
             }
 
             if let Ok(result) = timer_receiver.lock().unwrap().try_recv() {
@@ -451,23 +747,29 @@ fn run_context_extraction_with_options(
                 match result {
                     Ok(RunOutcome::Finished) => {
                         ui.set_progress(1.0);
-                        ui.set_message(if arabic { "تم فك الضغط بنجاح ✔".into() } else { "Extraction completed successfully ✔".into() });
+                        ui.set_file_progress(1.0);
+                        ui.set_file_percent(100);
+                        ui.set_total_progress(1.0);
+                        ui.set_total_percent(100);
+                        ui.set_time_left("00:00:00".into());
+                        ui.set_action_text(if arabic { "تم الاستخراج بنجاح ✔" } else { "Extraction completed successfully ✔" }.into());
                     }
                     Ok(RunOutcome::Cancelled) => {
-                        ui.set_message(if arabic { "تم إلغاء فك الضغط".into() } else { "Extraction cancelled".into() });
+                        ui.set_action_text(if arabic { "تم إلغاء فك الضغط" } else { "Extraction cancelled" }.into());
                     }
                     Err(error) => {
                         close_delay_ms = 4000;
                         let err_msg = if arabic {
                             if error.contains("password") || error.contains("encrypted") {
-                                "خطأ: كلمة المرور غير صحيحة أو الملف مشفر".to_string()
+                                "خطأ: كلمة المرور غير صحيحة أو الملف مشفر"
                             } else {
-                                format!("خطأ: {error}")
+                                "خطأ في فك الضغط"
                             }
                         } else {
-                            format!("Error: {error}")
+                            "Extraction error"
                         };
-                        ui.set_message(err_msg.into());
+                        ui.set_action_text(err_msg.into());
+                        ui.set_current_file(error.into());
                     }
                 }
                 // Show result, then close.
@@ -542,7 +844,7 @@ fn run_context_compression_with_options(paths: Vec<PathBuf>, output: PathBuf, fo
     let output_existed = output.is_file();
     let cancelled = Arc::new(AtomicBool::new(false));
     let thread_cancelled = cancelled.clone();
-    let progress_handle = Arc::new(AtomicU8::new(0));
+    let progress_handle = ProgressHandle::new();
     let worker_progress = progress_handle.clone();
     let worker_output = output.clone();
     let worker_done = Arc::new(AtomicBool::new(false));
@@ -575,13 +877,42 @@ fn run_context_compression_with_options(paths: Vec<PathBuf>, output: PathBuf, fo
         if let Some(ui) = center_weak.upgrade() { center_window(&ui.window()); }
         winicon::install();
     });
-    ui.set_message(if arabic { format!("جاري ضغط الملفات بصيغة {format_name}...").into() } else { format!("Compressing files as {format_name}...").into() });
+    ui.set_rtl(arabic);
+    let archive_name = output.file_name().unwrap_or_default().to_string_lossy().to_string();
+    ui.set_archive_name(archive_name.clone().into());
+    ui.set_current_file(archive_name.clone().into());
+    ui.set_action_text(if arabic { format!("جاري ضغط ({format_name})") } else { format!("compressing ({format_name})") }.into());
+
+    let cancel_flag = cancelled.clone();
+    let cancel_weak = ui.as_weak();
+    ui.on_cancel(move || {
+        cancel_flag.store(true, Ordering::SeqCst);
+        if let Some(ui) = cancel_weak.upgrade() {
+            let _ = ui.hide();
+        }
+    });
+
+    let bg_weak = ui.as_weak();
+    ui.on_toggle_background(move || {
+        if let Some(ui) = bg_weak.upgrade() {
+            let _ = ui.hide();
+        }
+    });
+
+    let pause_weak = ui.as_weak();
+    ui.on_toggle_pause(move || {
+        if let Some(ui) = pause_weak.upgrade() {
+            ui.set_is_paused(!ui.get_is_paused());
+        }
+    });
+
+    ui.on_show_mode(|| {});
+    ui.on_show_help(|| {
+        let _ = webbrowser::open("https://github.com/Michael-Maged1/MickeyRAR");
+    });
+
     let close_cancelled = cancelled.clone();
     let close_done = worker_done.clone();
-    // Closing the window means "stop now": cancel 7-Zip, delete the incomplete
-    // archive, and then really end the program. A helper thread does the waiting
-    // so the UI thread never blocks and the process cannot be left behind
-    // holding a handle on the half-written file.
     ui.window().on_close_requested(move || {
         close_cancelled.store(true, Ordering::SeqCst);
         let done = close_done.clone();
@@ -597,33 +928,54 @@ fn run_context_compression_with_options(paths: Vec<PathBuf>, output: PathBuf, fo
     let weak = ui.as_weak();
     let timer_receiver = receiver.clone();
     let timer_progress = progress_handle.clone();
+    let start_time = Instant::now();
     let timer = Timer::default();
     let mut shown_percent = u8::MAX;
-    timer.start(TimerMode::Repeated, Duration::from_millis(120), move || {
+    timer.start(TimerMode::Repeated, Duration::from_millis(80), move || {
         if let Some(ui) = weak.upgrade() {
-            // Real percentage from 7-Zip, not a guess: the bar only moves when
-            // compression actually moves, and it shows how far along it is.
-            let percent = timer_progress.load(Ordering::Relaxed);
+            let percent = timer_progress.percent.load(Ordering::Relaxed);
+            let cur_file = timer_progress.current_file.lock().map(|l| l.clone()).unwrap_or_default();
+            if !cur_file.is_empty() {
+                ui.set_current_file(cur_file.into());
+            }
+
+            let elapsed_secs = start_time.elapsed().as_secs();
+            let elapsed_str = format!("{:02}:{:02}:{:02}", elapsed_secs / 3600, (elapsed_secs % 3600) / 60, elapsed_secs % 60);
+            ui.set_elapsed_time(elapsed_str.into());
+
+            if percent > 0 && percent < 100 {
+                let total_est = (elapsed_secs as f64) / (percent as f64 / 100.0);
+                let rem_secs = (total_est - elapsed_secs as f64).max(0.0) as u64;
+                let rem_str = format!("{:02}:{:02}:{:02}", rem_secs / 3600, (rem_secs % 3600) / 60, rem_secs % 60);
+                ui.set_time_left(rem_str.into());
+            } else if percent >= 100 {
+                ui.set_time_left("00:00:00".into());
+            } else {
+                ui.set_time_left("--:--:--".into());
+            }
+
             ui.set_progress(percent as f32 / 100.0);
+            ui.set_file_progress(percent as f32 / 100.0);
+            ui.set_file_percent(percent as i32);
+            ui.set_total_progress(percent as f32 / 100.0);
+            ui.set_total_percent(percent as i32);
+
             if percent != shown_percent {
                 shown_percent = percent;
-                let text = if percent == 0 {
-                    if arabic { format!("جاري تجهيز الملفات ({format_name})...") } else { format!("Preparing files ({format_name})...") }
-                } else if arabic {
-                    format!("جاري ضغط الملفات بصيغة {format_name}... {percent}%")
-                } else {
-                    format!("Compressing files as {format_name}... {percent}%")
-                };
-                ui.set_message(text.into());
             }
             if let Ok(result) = timer_receiver.lock().unwrap().try_recv() {
                 match result {
                     Ok(RunOutcome::Finished) => {
                         ui.set_progress(1.0);
-                        ui.set_message(if arabic { format!("تم إنشاء ملف {format_name} بنجاح").into() } else { format!("{format_name} archive created successfully").into() });
+                        ui.set_file_progress(1.0);
+                        ui.set_file_percent(100);
+                        ui.set_total_progress(1.0);
+                        ui.set_total_percent(100);
+                        ui.set_time_left("00:00:00".into());
+                        ui.set_action_text(if arabic { format!("تم إنشاء ملف {format_name} بنجاح ✔") } else { format!("{format_name} archive created successfully ✔") }.into());
                     }
-                    Ok(RunOutcome::Cancelled) => { ui.set_message(if arabic { "تم إلغاء العملية".into() } else { "Compression cancelled".into() }); }
-                    Err(error) => { ui.set_message(format!("Error: {error}").into()); }
+                    Ok(RunOutcome::Cancelled) => { ui.set_action_text(if arabic { "تم إلغاء العملية" } else { "Compression cancelled" }.into()); }
+                    Err(error) => { ui.set_action_text(format!("Error: {error}").into()); }
                 }
                 let _ = slint::quit_event_loop();
             }
@@ -1244,22 +1596,48 @@ fn run_in_app_extraction(
 
     let progress_ui = ProgressWindow::new()?;
     progress_ui.set_rtl(arabic);
-    let name = archive.file_name().unwrap_or_default().to_string_lossy();
-    progress_ui.set_message(if arabic {
-        format!("جاري فك ضغط {name}...").into()
-    } else {
-        format!("Extracting {name}...").into()
-    });
+    let name = archive.file_name().unwrap_or_default().to_string_lossy().to_string();
+    progress_ui.set_archive_name(name.clone().into());
+    progress_ui.set_current_file(name.clone().into());
+    progress_ui.set_action_text(if arabic { "جاري استخراج" } else { "extracting" }.into());
     progress_ui.set_progress(0.0);
     center_window(&progress_ui.window());
     progress_ui.show()?;
 
     let cancelled = Arc::new(AtomicBool::new(false));
-    let progress_handle = Arc::new(AtomicU8::new(0));
+    let progress_handle = ProgressHandle::new();
     let worker_cancelled = cancelled.clone();
     let worker_progress = progress_handle.clone();
     let worker_done = Arc::new(AtomicBool::new(false));
     let (sender, receiver) = mpsc::channel();
+
+    let cancel_flag = cancelled.clone();
+    let p_weak_cancel = progress_ui.as_weak();
+    progress_ui.on_cancel(move || {
+        cancel_flag.store(true, Ordering::SeqCst);
+        if let Some(p) = p_weak_cancel.upgrade() {
+            let _ = p.hide();
+        }
+    });
+
+    let p_weak_bg = progress_ui.as_weak();
+    progress_ui.on_toggle_background(move || {
+        if let Some(p) = p_weak_bg.upgrade() {
+            let _ = p.hide();
+        }
+    });
+
+    let p_weak_pause = progress_ui.as_weak();
+    progress_ui.on_toggle_pause(move || {
+        if let Some(p) = p_weak_pause.upgrade() {
+            p.set_is_paused(!p.get_is_paused());
+        }
+    });
+
+    progress_ui.on_show_mode(|| {});
+    progress_ui.on_show_help(|| {
+        let _ = webbrowser::open("https://github.com/Michael-Maged1/MickeyRAR");
+    });
 
     let dest_clone = dest.clone();
     let archive_clone = archive.clone();
@@ -1295,7 +1673,7 @@ fn run_in_app_extraction(
         }
         // Store 100% only on success so the UI shows the real final percent on error.
         if matches!(res, Ok(RunOutcome::Finished)) {
-            worker_progress.store(100, Ordering::Relaxed);
+            worker_progress.percent.store(100, Ordering::Relaxed);
         }
         worker_finished.store(true, Ordering::SeqCst);
         let _ = sender.send(res);
@@ -1311,6 +1689,7 @@ fn run_in_app_extraction(
     let timer = Rc::new(RefCell::new(None));
     let timer_progress = progress_handle.clone();
     let timer_receiver = Arc::new(Mutex::new(receiver));
+    let start_time = Instant::now();
     let mut shown_percent = u8::MAX;
     let timer_self = timer.clone();
     let progress_ui_keep = Rc::new(progress_ui);
@@ -1320,25 +1699,47 @@ fn run_in_app_extraction(
     new_timer.start(TimerMode::Repeated, Duration::from_millis(80), move || {
         let _keep = &progress_ui_ref;
         if let Some(ui) = p_weak.upgrade() {
-            let percent = timer_progress.load(Ordering::Relaxed);
+            let percent = timer_progress.percent.load(Ordering::Relaxed);
+            let cur_file = timer_progress.current_file.lock().map(|l| l.clone()).unwrap_or_default();
+            if !cur_file.is_empty() {
+                ui.set_current_file(cur_file.into());
+            }
+
+            let elapsed_secs = start_time.elapsed().as_secs();
+            let elapsed_str = format!("{:02}:{:02}:{:02}", elapsed_secs / 3600, (elapsed_secs % 3600) / 60, elapsed_secs % 60);
+            ui.set_elapsed_time(elapsed_str.into());
+
+            if percent > 0 && percent < 100 {
+                let total_est = (elapsed_secs as f64) / (percent as f64 / 100.0);
+                let rem_secs = (total_est - elapsed_secs as f64).max(0.0) as u64;
+                let rem_str = format!("{:02}:{:02}:{:02}", rem_secs / 3600, (rem_secs % 3600) / 60, rem_secs % 60);
+                ui.set_time_left(rem_str.into());
+            } else if percent >= 100 {
+                ui.set_time_left("00:00:00".into());
+            } else {
+                ui.set_time_left("--:--:--".into());
+            }
+
             ui.set_progress(percent as f32 / 100.0);
+            ui.set_file_progress(percent as f32 / 100.0);
+            ui.set_file_percent(percent as i32);
+            ui.set_total_progress(percent as f32 / 100.0);
+            ui.set_total_percent(percent as i32);
+
             if percent != shown_percent {
                 shown_percent = percent;
-                let text = if percent == 0 {
-                    if arabic { "جاري فك الضغط...".to_string() } else { "Extracting files...".to_string() }
-                } else if arabic {
-                    format!("جاري فك الضغط... {percent}%")
-                } else {
-                    format!("Extracting files... {percent}%")
-                };
-                ui.set_message(text.into());
             }
 
             if let Ok(result) = timer_receiver.lock().unwrap().try_recv() {
                 let status_msg = match result {
                     Ok(RunOutcome::Finished) => {
                         ui.set_progress(1.0);
-                        ui.set_message(if arabic { "تم فك الضغط بنجاح".into() } else { "Extraction completed successfully".into() });
+                        ui.set_file_progress(1.0);
+                        ui.set_file_percent(100);
+                        ui.set_total_progress(1.0);
+                        ui.set_total_percent(100);
+                        ui.set_time_left("00:00:00".into());
+                        ui.set_action_text(if arabic { "تم الاستخراج بنجاح ✔" } else { "Extraction completed successfully ✔" }.into());
                         if arabic {
                             format!("تم فك الضغط بنجاح إلى {}", dest.display())
                         } else {

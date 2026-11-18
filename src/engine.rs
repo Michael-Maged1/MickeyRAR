@@ -121,8 +121,21 @@ pub enum RunOutcome {
     Cancelled,
 }
 
-/// Progress percentage (0-100) as reported by 7-Zip itself.
-pub type ProgressHandle = Arc<AtomicU8>;
+/// Progress percentage (0-100) and current file as reported by 7-Zip itself.
+#[derive(Clone, Default)]
+pub struct ProgressHandle {
+    pub percent: Arc<AtomicU8>,
+    pub current_file: Arc<std::sync::Mutex<String>>,
+}
+
+impl ProgressHandle {
+    pub fn new() -> Self {
+        Self {
+            percent: Arc::new(AtomicU8::new(0)),
+            current_file: Arc::new(std::sync::Mutex::new(String::new())),
+        }
+    }
+}
 
 /// Ask 7-Zip to print its own progress percentage (`-bsp1`) and store it in
 /// `progress`, so the UI can show the real position instead of guessing. Large
@@ -305,19 +318,43 @@ fn join_reader(reader: Option<thread::JoinHandle<()>>) {
     drop(reader);
 }
 
-/// Parse `NN%` tokens from 7-Zip's progress stream and publish the highest one.
-/// 7-Zip separates updates with `\r`, `\n` and backspaces, so the stream is
-/// scanned byte by byte instead of line by line.
+/// Parse `NN%` tokens and current filenames from 7-Zip's progress stream.
 fn read_progress_percentages(mut stream: impl Read, progress: Option<ProgressHandle>) {
     let mut buffer = [0u8; 4096];
     let mut digits = String::new();
     let mut highest: u8 = 0;
+    let mut line_buf = String::new();
     loop {
         let read = match stream.read(&mut buffer) {
             Ok(0) | Err(_) => break,
             Ok(count) => count,
         };
         for &byte in &buffer[..read] {
+            if byte == b'\r' || byte == b'\n' {
+                if !line_buf.is_empty() {
+                    if let Some(pos) = line_buf.find('%') {
+                        let after = line_buf[pos + 1..].trim();
+                        let fname = if let Some(dash) = after.find(" - ") {
+                            after[dash + 3..].trim()
+                        } else if let Some(plus) = after.find(" + ") {
+                            after[plus + 3..].trim()
+                        } else {
+                            after.trim_start_matches(|c: char| c == '+' || c == '-' || c.is_whitespace()).trim()
+                        };
+                        if !fname.is_empty() && !fname.starts_with("Everything is Ok") {
+                            if let Some(handle) = &progress {
+                                if let Ok(mut lock) = handle.current_file.lock() {
+                                    *lock = fname.to_string();
+                                }
+                            }
+                        }
+                    }
+                    line_buf.clear();
+                }
+            } else {
+                line_buf.push(byte as char);
+            }
+
             if byte.is_ascii_digit() {
                 if digits.len() == 3 { digits.remove(0); }
                 digits.push(byte as char);
@@ -326,7 +363,9 @@ fn read_progress_percentages(mut stream: impl Read, progress: Option<ProgressHan
                     if let Ok(value) = digits.parse::<u8>() {
                         if value <= 100 && value >= highest {
                             highest = value;
-                            if let Some(handle) = &progress { handle.store(value, Ordering::Relaxed); }
+                            if let Some(handle) = &progress {
+                                handle.percent.store(value, Ordering::Relaxed);
+                            }
                         }
                     }
                 }
@@ -460,15 +499,16 @@ mod tests {
     }
     #[test] fn parses_7zip_progress_percentages() {
         let feed = b"Scanning\r\n  0%\r\n  7% + file.bin\r\n 60% + file.bin\r\n100% + file.bin\r\n";
-        let handle = Arc::new(AtomicU8::new(0));
+        let handle = ProgressHandle::new();
         read_progress_percentages(&feed[..], Some(handle.clone()));
-        assert_eq!(handle.load(Ordering::Relaxed), 100);
+        assert_eq!(handle.percent.load(Ordering::Relaxed), 100);
+        assert_eq!(*handle.current_file.lock().unwrap(), "file.bin");
         // Missing handle must be harmless.
         read_progress_percentages(&feed[..], None);
         // Values that cannot be a percentage (or go backwards) are ignored.
-        let handle = Arc::new(AtomicU8::new(0));
+        let handle = ProgressHandle::new();
         read_progress_percentages(&b" 80% then 40% then 999%"[..], Some(handle.clone()));
-        assert_eq!(handle.load(Ordering::Relaxed), 80);
+        assert_eq!(handle.percent.load(Ordering::Relaxed), 80);
     }
 }
 
