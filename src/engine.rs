@@ -153,12 +153,14 @@ pub fn run_7z_cancellable_with_progress(
     for executable in executables {
         let mut command = Command::new(&executable);
         command.stdin(Stdio::null());
+        let err_output = Arc::new(std::sync::Mutex::new(String::new()));
+        let err_output_clone = err_output.clone();
         if progress.is_some() && !args.is_empty() {
             // Keep the operation switch first, then ask 7-Zip for progress data.
             command.arg(&args[0]).arg("-bsp1").args(&args[1..]);
-            command.stdout(Stdio::piped()).stderr(Stdio::null());
+            command.stdout(Stdio::piped()).stderr(Stdio::piped());
         } else {
-            command.args(args).stdout(Stdio::null()).stderr(Stdio::null());
+            command.args(args).stdout(Stdio::null()).stderr(Stdio::piped());
         }
         #[cfg(windows)]
         command.creation_flags(CREATE_NO_WINDOW);
@@ -172,6 +174,16 @@ pub fn run_7z_cancellable_with_progress(
         // takes 7-Zip down with it, so it can never keep the archive file locked.
         #[cfg(windows)]
         let _kill_on_close = KillOnCloseJob::attach(&child);
+        let _err_reader = child.stderr.take().map(|mut stream| {
+            thread::spawn(move || {
+                let mut buf = Vec::new();
+                let _ = stream.read_to_end(&mut buf);
+                let text = String::from_utf8_lossy(&buf).to_string();
+                if let Ok(mut lock) = err_output_clone.lock() {
+                    *lock = text;
+                }
+            })
+        });
         // 7-Zip writes progress into a pipe: drain it in a helper thread, otherwise
         // the pipe buffer fills up and 7-Zip blocks (a real freeze).
         let reader = child.stdout.take().map(|stream| {
@@ -190,7 +202,23 @@ pub fn run_7z_cancellable_with_progress(
             match child.try_wait() {
                 Ok(Some(status)) => {
                     join_reader(reader);
-                    return if status.success() { Ok(RunOutcome::Finished) } else { Err(format!("7-Zip failed ({status})")) };
+                    if status.success() {
+                        return Ok(RunOutcome::Finished);
+                    } else {
+                        let err_text = err_output.lock().map(|l| l.clone()).unwrap_or_default();
+                        let clean_err = err_text.trim();
+                        if clean_err.contains("Wrong password")
+                            || clean_err.contains("Break signaled")
+                            || clean_err.contains("Can not open encrypted archive")
+                        {
+                            return Err("Wrong password or password required".into());
+                        }
+                        if !clean_err.is_empty() {
+                            let first_err = clean_err.lines().find(|l| l.contains("ERROR:") || l.contains("Error")).unwrap_or(clean_err);
+                            return Err(first_err.to_string());
+                        }
+                        return Err(format!("7-Zip failed ({status})"));
+                    }
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(80)),
                 Err(error) => { join_reader(reader); return Err(format!("Could not read 7-Zip status: {error}")); }
@@ -198,6 +226,78 @@ pub fn run_7z_cancellable_with_progress(
         }
     }
     Err("7-Zip executable (7zz or 7z) was not found in PATH".into())
+}
+
+/// Check if an archive contains encrypted files or has an encrypted header.
+pub fn is_archive_encrypted(archive: &Path) -> bool {
+    let mut executables = Vec::new();
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(dir) = current_exe.parent() {
+            executables.push(dir.join(if cfg!(target_os="windows") { "7z.exe" } else { "7zz" }));
+        }
+    }
+    if cfg!(target_os="windows") {
+        executables.extend([
+            r"C:\Program Files\7-Zip\7z.exe",
+            r"C:\Program Files (x86)\7-Zip\7z.exe",
+            r"C:\Program Files\Mickey RAR\7z.exe",
+            "7z.exe", "7zz.exe", "7z", "7zz"
+        ].into_iter().map(PathBuf::from));
+    } else {
+        executables.extend(["7zz", "7z"].into_iter().map(PathBuf::from));
+    }
+    for executable in executables {
+        let mut cmd = Command::new(&executable);
+        cmd.stdin(Stdio::null());
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.args(["l", "-slt", "-p"]).arg(archive);
+        if let Ok(output) = cmd.output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stdout.lines().any(|l| l.trim() == "Encrypted = +") {
+                return true;
+            }
+            if stderr.contains("Wrong password") || stderr.contains("Can not open encrypted")
+                || stdout.contains("Enter password") {
+                return true;
+            }
+            return false;
+        }
+    }
+    false
+}
+
+/// Test whether the given password successfully decrypts the archive.
+pub fn test_archive_password(archive: &Path, password: &str) -> bool {
+    let mut executables = Vec::new();
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(dir) = current_exe.parent() {
+            executables.push(dir.join(if cfg!(target_os="windows") { "7z.exe" } else { "7zz" }));
+        }
+    }
+    if cfg!(target_os="windows") {
+        executables.extend([
+            r"C:\Program Files\7-Zip\7z.exe",
+            r"C:\Program Files (x86)\7-Zip\7z.exe",
+            r"C:\Program Files\Mickey RAR\7z.exe",
+            "7z.exe", "7zz.exe", "7z", "7zz"
+        ].into_iter().map(PathBuf::from));
+    } else {
+        executables.extend(["7zz", "7z"].into_iter().map(PathBuf::from));
+    }
+    for executable in executables {
+        let mut cmd = Command::new(&executable);
+        cmd.stdin(Stdio::null());
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        let pwd_arg = format!("-p{password}");
+        cmd.args(["t", "-y", &pwd_arg]).arg(archive);
+        if let Ok(output) = cmd.output() {
+            return output.status.success();
+        }
+    }
+    false
 }
 
 fn join_reader(reader: Option<thread::JoinHandle<()>>) {

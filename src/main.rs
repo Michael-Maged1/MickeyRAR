@@ -4,7 +4,7 @@ mod i18n;
 use i18n::Language;
 mod engine;
 mod winicon;
-use engine::{CompressionSettings, RunOutcome, create_arguments, create_arguments_for_format, delete_file_with_retry, run_7z, run_7z_cancellable_with_progress};
+use engine::{CompressionSettings, RunOutcome, create_arguments, create_arguments_for_format, delete_file_with_retry, is_archive_encrypted, run_7z, run_7z_cancellable_with_progress, test_archive_password};
 use slint::{Model, ModelRc, VecModel, Timer, TimerMode};
 use std::{cell::RefCell, fs, path::{Path, PathBuf}, rc::Rc, sync::{mpsc, Arc, Mutex, atomic::{AtomicBool, AtomicU8, Ordering}}, thread, time::{Duration, Instant}};
 
@@ -85,6 +85,100 @@ slint::slint! {
             HorizontalBox { alignment: end; spacing: 8px; Button { text: "Cancel"; clicked => { root.cancel(); } } Button { text: "Create archive"; clicked => { root.start-compression(); } } }
         }
     }
+
+    export component PasswordDialog inherits Window {
+        title: "Mickey RAR";
+        icon: @image-url("../assets/icon-window.png");
+        width: 440px;
+        height: 240px;
+        background: #202522;
+        in-out property <string> archive-name: "";
+        in-out property <string> password: "";
+        in-out property <bool> show-password: false;
+        in-out property <bool> rtl: false;
+        in-out property <string> error-message: "";
+
+        callback submit();
+        callback cancel();
+
+        VerticalBox {
+            padding: 18px;
+            spacing: 10px;
+
+            HorizontalBox {
+                spacing: 12px;
+                alignment: start;
+                Rectangle {
+                    width: 34px;
+                    height: 34px;
+                    border-radius: 7px;
+                    background: #a7d63f;
+                    Image { source: @image-url("../assets/icon.png"); width: 34px; height: 34px; image-fit: contain; }
+                }
+                VerticalBox {
+                    padding: 0px;
+                    spacing: 2px;
+                    Text {
+                        text: root.rtl ? "أدخل كلمة المرور" : "Enter Password";
+                        color: #f3f7f1;
+                        font-size: 16px;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: root.rtl ? "الأرشيف محمي بكلمة مرور. أدخل كلمة المرور للمتابعة:" : "The archive is encrypted. Enter password to continue:";
+                        color: #b7c5b5;
+                        font-size: 11px;
+                    }
+                }
+            }
+
+            if root.archive-name != "": Text {
+                text: root.archive-name;
+                color: #a7d63f;
+                font-size: 12px;
+                font-weight: 600;
+                overflow: elide;
+            }
+
+            pwd-input := LineEdit {
+                text <=> root.password;
+                input-type: root.show-password ? InputType.text : InputType.password;
+                placeholder-text: root.rtl ? "اكتب كلمة المرور هنا..." : "Enter password here...";
+                accepted => { root.submit(); }
+            }
+
+            HorizontalBox {
+                padding: 0px;
+                spacing: 8px;
+                CheckBox {
+                    text: root.rtl ? "إظهار كلمة المرور" : "Show password";
+                    checked <=> root.show-password;
+                }
+            }
+
+            if root.error-message != "": Text {
+                text: root.error-message;
+                color: #ff6060;
+                font-size: 11px;
+                font-weight: 600;
+            }
+
+            Rectangle { vertical-stretch: 1; }
+
+            HorizontalBox {
+                alignment: end;
+                spacing: 10px;
+                Button {
+                    text: root.rtl ? "إلغاء" : "Cancel";
+                    clicked => { root.cancel(); }
+                }
+                Button {
+                    text: root.rtl ? "موافق" : "OK";
+                    clicked => { root.submit(); }
+                }
+            }
+        }
+    }
 }
 
 type CompressionWindow = ProgressWindow;
@@ -116,6 +210,55 @@ fn context_operation() -> Option<String> {
     ))
 }
 
+fn prompt_for_password(
+    archive_name: &str,
+    arabic: bool,
+    error_msg: Option<&str>,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let ui = PasswordDialog::new()?;
+    quit_process_on_close(&ui.window());
+    ui.set_rtl(arabic);
+    ui.set_archive_name(archive_name.into());
+    if let Some(err) = error_msg {
+        ui.set_error_message(err.into());
+    }
+    center_window(&ui.window());
+
+    let (sender, receiver) = mpsc::channel();
+    let s1 = sender.clone();
+    let weak = ui.as_weak();
+    ui.on_submit(move || {
+        if let Some(ui) = weak.upgrade() {
+            let pwd = ui.get_password().to_string();
+            let _ = s1.send(Some(pwd));
+            let _ = slint::quit_event_loop();
+        }
+    });
+    let s2 = sender.clone();
+    ui.on_cancel(move || {
+        let _ = s2.send(None);
+        let _ = slint::quit_event_loop();
+    });
+
+    ui.run()?;
+    Ok(receiver.try_recv().ok().flatten())
+}
+
+fn cleanup_zero_byte_files(dir: &Path) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                if let Ok(meta) = p.metadata() {
+                    if meta.len() == 0 {
+                        let _ = fs::remove_file(&p);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn run_context_extraction_with_options(
     paths: Vec<PathBuf>,
     target_dir: Option<PathBuf>,
@@ -125,6 +268,34 @@ fn run_context_extraction_with_options(
     if paths.is_empty() { return Err("No archive selected".into()); }
     let archives: Vec<PathBuf> = paths.into_iter().filter(|p| p.is_file()).collect();
     if archives.is_empty() { return Err("Selected file does not exist".into()); }
+
+    // Prompt for password if any archive is encrypted
+    let mut password: Option<String> = None;
+    for archive in &archives {
+        let abs_archive = if archive.is_absolute() { archive.clone() } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(archive)
+        };
+        if is_archive_encrypted(&abs_archive) {
+            let name = abs_archive.file_name().unwrap_or_default().to_string_lossy();
+            let mut err: Option<&str> = None;
+            loop {
+                match prompt_for_password(&name, arabic, err)? {
+                    Some(pwd) => {
+                        if test_archive_password(&abs_archive, &pwd) {
+                            password = Some(pwd);
+                            break;
+                        } else {
+                            err = Some(if arabic { "كلمة المرور غير صحيحة، يرجى إعادة المحاولة" } else { "Incorrect password, please try again" });
+                        }
+                    }
+                    None => {
+                        return Ok(());
+                    }
+                }
+            }
+            break;
+        }
+    }
 
     let ui = ProgressWindow::new()?;
     quit_process_on_close(&ui.window());
@@ -149,6 +320,7 @@ fn run_context_extraction_with_options(
     let (sender, receiver) = mpsc::channel();
 
     let archives_worker = archives.clone();
+    let password_worker = password.clone();
     let worker = thread::spawn(move || {
         for archive in archives_worker {
             if worker_cancelled.load(Ordering::Relaxed) { break; }
@@ -170,20 +342,25 @@ fn run_context_extraction_with_options(
             let mut output_arg = std::ffi::OsString::from("-o");
             output_arg.push(dest.as_os_str());
 
-            let args = vec![
+            let mut args = vec![
                 std::ffi::OsString::from("x"),
                 std::ffi::OsString::from("-y"),
                 std::ffi::OsString::from("-aoa"),
                 output_arg,
                 abs_archive.as_os_str().to_owned(),
             ];
+            if let Some(ref pwd) = password_worker {
+                args.push(std::ffi::OsString::from(format!("-p{pwd}")));
+            }
             let res = run_7z_cancellable_with_progress(&args, None, &worker_cancelled, Some(&worker_progress));
             if let Err(e) = res {
+                cleanup_zero_byte_files(&dest);
                 worker_finished.store(true, Ordering::SeqCst);
                 let _ = sender.send(Err(e));
                 return;
             }
             if worker_cancelled.load(Ordering::Relaxed) {
+                cleanup_zero_byte_files(&dest);
                 worker_finished.store(true, Ordering::SeqCst);
                 let _ = sender.send(Ok(RunOutcome::Cancelled));
                 return;
@@ -234,6 +411,7 @@ fn run_context_extraction_with_options(
             }
 
             if let Ok(result) = timer_receiver.lock().unwrap().try_recv() {
+                let mut close_delay_ms = 1000;
                 match result {
                     Ok(RunOutcome::Finished) => {
                         ui.set_progress(1.0);
@@ -243,13 +421,23 @@ fn run_context_extraction_with_options(
                         ui.set_message(if arabic { "تم إلغاء فك الضغط".into() } else { "Extraction cancelled".into() });
                     }
                     Err(error) => {
-                        ui.set_message(format!("Error: {error}").into());
+                        close_delay_ms = 4000;
+                        let err_msg = if arabic {
+                            if error.contains("password") || error.contains("encrypted") {
+                                "خطأ: كلمة المرور غير صحيحة أو الملف مشفر".to_string()
+                            } else {
+                                format!("خطأ: {error}")
+                            }
+                        } else {
+                            format!("Error: {error}")
+                        };
+                        ui.set_message(err_msg.into());
                     }
                 }
-                // Show result for 1 second, then close.
+                // Show result, then close.
                 let holder = close_timer_holder.clone();
                 let auto_close = Timer::default();
-                auto_close.start(TimerMode::SingleShot, Duration::from_millis(1000), move || {
+                auto_close.start(TimerMode::SingleShot, Duration::from_millis(close_delay_ms), move || {
                     let _ = slint::quit_event_loop();
                     *holder.lock().unwrap() = None; // drop timer
                 });
@@ -1006,6 +1194,30 @@ fn run_in_app_extraction(
     arabic: bool,
     main_ui: slint::Weak<MainWindow>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let mut password: Option<String> = None;
+    if is_archive_encrypted(&archive) {
+        let a_name = archive.file_name().unwrap_or_default().to_string_lossy();
+        let mut err: Option<&str> = None;
+        loop {
+            match prompt_for_password(&a_name, arabic, err)? {
+                Some(pwd) => {
+                    if test_archive_password(&archive, &pwd) {
+                        password = Some(pwd);
+                        break;
+                    } else {
+                        err = Some(if arabic { "كلمة المرور غير صحيحة، يرجى إعادة المحاولة" } else { "Incorrect password, please try again" });
+                    }
+                }
+                None => {
+                    if let Some(m) = main_ui.upgrade() {
+                        m.set_status(if arabic { "تم إلغاء فك الضغط" } else { "Extraction cancelled" }.into());
+                    }
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     let progress_ui = ProgressWindow::new()?;
     progress_ui.set_rtl(arabic);
     let name = archive.file_name().unwrap_or_default().to_string_lossy();
@@ -1043,6 +1255,9 @@ fn run_in_app_extraction(
             output_arg,
             archive_clone.as_os_str().to_owned(),
         ];
+        if let Some(ref pwd) = password {
+            args.push(std::ffi::OsString::from(format!("-p{pwd}")));
+        }
         // Only append file filters when user selected specific files;
         // passing no filters extracts everything (correct default).
         for f in selected_clone {
@@ -1051,6 +1266,9 @@ fn run_in_app_extraction(
         }
 
         let res = run_7z_cancellable_with_progress(&args, None, &worker_cancelled, Some(&worker_progress));
+        if res.is_err() {
+            cleanup_zero_byte_files(&dest_clone);
+        }
         // Store 100% only on success so the UI shows the real final percent on error.
         if matches!(res, Ok(RunOutcome::Finished)) {
             worker_progress.store(100, Ordering::Relaxed);
@@ -1399,7 +1617,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let selected = state.borrow().archive.clone()
             .or_else(|| rfd::FileDialog::new().pick_file());
         if let Some(p) = selected { if let Some(ui) = weak.upgrade() {
-            match run_text_args(&["t".as_ref(), p.as_os_str()]) {
+            let mut pwd_opt = None;
+            if is_archive_encrypted(&p) {
+                let a_name = p.file_name().unwrap_or_default().to_string_lossy();
+                let mut err: Option<&str> = None;
+                loop {
+                    match prompt_for_password(&a_name, ui.get_arabic_mode(), err) {
+                        Ok(Some(pwd)) => {
+                            if test_archive_password(&p, &pwd) {
+                                pwd_opt = Some(pwd);
+                                break;
+                            } else {
+                                err = Some(if ui.get_arabic_mode() { "كلمة المرور غير صحيحة، يرجى إعادة المحاولة" } else { "Incorrect password, please try again" });
+                            }
+                        }
+                        _ => return,
+                    }
+                }
+            }
+            let mut test_args: Vec<&std::ffi::OsStr> = vec!["t".as_ref(), p.as_os_str()];
+            let pwd_arg = pwd_opt.as_ref().map(|s| format!("-p{s}"));
+            if let Some(ref pa) = pwd_arg {
+                test_args.push(pa.as_ref());
+            }
+            match run_text_args(&test_args) {
                 Ok(_) => ui.set_status(if ui.get_arabic_mode() { "تم اختبار سلامة الأرشيف بنجاح" } else { "Archive integrity test passed" }.into()),
                 Err(e) => ui.set_status(format!("Test failed: {e}").into()),
             }
@@ -1473,17 +1714,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let is_archive = state.borrow().archive.is_some();
                 if is_archive {
                     let archive_path = state.borrow().archive.clone().unwrap();
+                    let mut password: Option<String> = None;
+                    if is_archive_encrypted(&archive_path) {
+                        let a_name = archive_path.file_name().unwrap_or_default().to_string_lossy();
+                        let mut err: Option<&str> = None;
+                        loop {
+                            match prompt_for_password(&a_name, ui.get_arabic_mode(), err) {
+                                Ok(Some(pwd)) => {
+                                    if test_archive_password(&archive_path, &pwd) {
+                                        password = Some(pwd);
+                                        break;
+                                    } else {
+                                        err = Some(if ui.get_arabic_mode() { "كلمة المرور غير صحيحة، يرجى إعادة المحاولة" } else { "Incorrect password, please try again" });
+                                    }
+                                }
+                                _ => return,
+                            }
+                        }
+                    }
                     let temp_dir = std::env::temp_dir().join("MickeyRAR_View");
                     let _ = std::fs::create_dir_all(&temp_dir);
                     let mut out_flag = std::ffi::OsString::from("-o");
                     out_flag.push(temp_dir.as_os_str());
-                    let args = vec![
+                    let mut args = vec![
                         std::ffi::OsString::from("e"),
                         std::ffi::OsString::from("-y"),
                         out_flag,
                         archive_path.as_os_str().to_owned(),
                         std::ffi::OsString::from(&name),
                     ];
+                    if let Some(ref pwd) = password {
+                        args.push(std::ffi::OsString::from(format!("-p{pwd}")));
+                    }
                     match run_7z(&args, None) {
                         Ok(_) => {
                             let extracted_file = temp_dir.join(Path::new(&name).file_name().unwrap_or(std::ffi::OsStr::new(&name)));
