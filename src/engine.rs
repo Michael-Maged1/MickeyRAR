@@ -152,6 +152,7 @@ pub fn run_7z_cancellable_with_progress(
     }
     for executable in executables {
         let mut command = Command::new(&executable);
+        command.stdin(Stdio::null());
         if progress.is_some() && !args.is_empty() {
             // Keep the operation switch first, then ask 7-Zip for progress data.
             command.arg(&args[0]).arg("-bsp1").args(&args[1..]);
@@ -200,7 +201,8 @@ pub fn run_7z_cancellable_with_progress(
 }
 
 fn join_reader(reader: Option<thread::JoinHandle<()>>) {
-    if let Some(reader) = reader { let _ = reader.join(); }
+    // Detach reader handle so deadlocked pipe reads can never block child exit
+    drop(reader);
 }
 
 /// Parse `NN%` tokens from 7-Zip's progress stream and publish the highest one.

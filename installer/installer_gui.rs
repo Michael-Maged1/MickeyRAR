@@ -59,6 +59,7 @@ slint! {
 
 const PROGRAM_BYTES: &[u8] = include_bytes!("../target/release/mickey-rar.exe");
 const SEVEN_ZIP_BYTES: &[u8] = include_bytes!("runtime/7z.exe");
+const SEVEN_ZIP_DLL_BYTES: &[u8] = include_bytes!("runtime/7z.dll");
 const UNINSTALLER_BYTES: &[u8] = include_bytes!("../target/release/mickey-rar-uninstaller.exe");
 
 fn registry_value(key: &str, name: &str, value: &str) {
@@ -96,25 +97,35 @@ fn register_context_menu(executable: &PathBuf) {
     for old_key in [
         r"HKCU\Software\Classes\*\shell\MickeyRAR",
         r"HKCU\Software\Classes\Directory\shell\MickeyRAR",
+        r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\CommandStore\shell\MickeyRAR.Open",
         r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\CommandStore\shell\MickeyRAR.Add",
         r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\CommandStore\shell\MickeyRAR.Compress",
         r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\CommandStore\shell\MickeyRAR.Email",
+        r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\CommandStore\shell\MickeyRAR.ExtractHere",
+        r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\CommandStore\shell\MickeyRAR.ExtractToFolder",
+        r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\CommandStore\shell\MickeyRAR.ExtractTo",
     ] { registry_delete(old_key); }
     let command_store = r"HKLM\Software\Microsoft\Windows\CurrentVersion\Explorer\CommandStore\shell";
     let executable = executable.display().to_string();
     let commands = [
-        ("MickeyRAR.Add", "Add to archive with Mickey RAR...", "--add"),
-        ("MickeyRAR.Compress", "Compress to ZIP with Mickey RAR", "--compress"),
-        ("MickeyRAR.Email", "Compress to ZIP and email...", "--compress-email"),
+        ("MickeyRAR.Open", "Open with Mickey RAR (فتح باستخدام Mickey RAR)", ""),
         ("MickeyRAR.ExtractHere", "Extract Here (فك الضغط هنا)", "--extract-here"),
         ("MickeyRAR.ExtractToFolder", "Extract to subfolder (استخراج إلى مجلد)", "--extract-to-folder"),
         ("MickeyRAR.ExtractTo", "Extract files... (استخراج إلى...)", "--extract-to"),
+        ("MickeyRAR.Add", "Add to archive with Mickey RAR...", "--add"),
+        ("MickeyRAR.Compress", "Compress to ZIP with Mickey RAR", "--compress"),
+        ("MickeyRAR.Email", "Compress to ZIP and email...", "--compress-email"),
     ];
     for (verb, label, flag) in commands {
         let verb_key = format!(r"{command_store}\{verb}");
         let command_key = format!(r"{verb_key}\command");
         registry_value(&verb_key, "", label);
-        registry_value(&command_key, "", &format!("\"{executable}\" {flag} \"%1\""));
+        let cmd = if flag.is_empty() {
+            format!("\"{executable}\" \"%1\"")
+        } else {
+            format!("\"{executable}\" {flag} \"%1\"")
+        };
+        registry_value(&command_key, "", &cmd);
     }
     for target in [
         r"HKLM\Software\Classes\*\shell\MickeyRAR",
@@ -123,8 +134,18 @@ fn register_context_menu(executable: &PathBuf) {
         r"HKCU\Software\Classes\Directory\shell\MickeyRAR",
     ] {
         registry_value(target, "MUIVerb", "Mickey RAR");
-        registry_value(target, "SubCommands", "MickeyRAR.ExtractHere;MickeyRAR.ExtractToFolder;MickeyRAR.ExtractTo;MickeyRAR.Add;MickeyRAR.Compress;MickeyRAR.Email");
+        registry_value(target, "SubCommands", "MickeyRAR.Open;MickeyRAR.ExtractHere;MickeyRAR.ExtractToFolder;MickeyRAR.ExtractTo;MickeyRAR.Add;MickeyRAR.Compress;MickeyRAR.Email");
         registry_value(target, "Icon", &executable);
+    }
+
+    let prog_id = r"HKLM\Software\Classes\MickeyRAR.Archive";
+    registry_value(prog_id, "", "Mickey RAR Archive");
+    registry_value(&format!(r"{prog_id}\DefaultIcon"), "", &format!("\"{executable}\",0"));
+    registry_value(&format!(r"{prog_id}\shell\open\command"), "", &format!("\"{executable}\" \"%1\""));
+
+    for ext in [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".iso"] {
+        let ext_key = format!(r"HKLM\Software\Classes\{ext}\OpenWithProgids");
+        registry_value(&ext_key, "MickeyRAR.Archive", "");
     }
 }
 
@@ -188,10 +209,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let install_dir = PathBuf::from(program_files).join("Mickey RAR");
         let executable = install_dir.join("mickey-rar.exe");
         let seven_zip = install_dir.join("7z.exe");
+        let seven_zip_dll = install_dir.join("7z.dll");
         let uninstaller = install_dir.join("uninstall.exe");
         if fs::create_dir_all(&install_dir).is_err()
             || fs::write(&executable, PROGRAM_BYTES).is_err()
             || fs::write(&seven_zip, SEVEN_ZIP_BYTES).is_err()
+            || fs::write(&seven_zip_dll, SEVEN_ZIP_DLL_BYTES).is_err()
             || fs::write(&uninstaller, UNINSTALLER_BYTES).is_err()
         {
             std::process::exit(1);

@@ -244,10 +244,7 @@ fn run_context_extraction_with_options(
                         ui.set_message(format!("Error: {error}").into());
                     }
                 }
-                let close_timer = Timer::default();
-                close_timer.start(TimerMode::SingleShot, Duration::from_millis(400), move || {
-                    let _ = slint::quit_event_loop();
-                });
+                let _ = slint::quit_event_loop();
             }
         }
     });
@@ -1100,20 +1097,11 @@ fn run_in_app_extraction(
                     }
                 };
 
-                let p_weak_close = p_weak.clone();
-                let main_done = main_ui.clone();
-                let self_timer_cleanup = timer_self.clone();
-                let status_msg_clone = status_msg.clone();
-                let close_timer = Timer::default();
-                close_timer.start(TimerMode::SingleShot, Duration::from_millis(400), move || {
-                    if let Some(p) = p_weak_close.upgrade() {
-                        let _ = p.hide();
-                    }
-                    if let Some(m) = main_done.upgrade() {
-                        m.set_status(status_msg_clone.as_str().into());
-                    }
-                    let _ = self_timer_cleanup.borrow_mut().take();
-                });
+                let _ = ui.hide();
+                if let Some(m) = main_ui.upgrade() {
+                    m.set_status(status_msg.as_str().into());
+                }
+                let _ = timer_self.borrow_mut().take();
             }
         }
     });
@@ -1187,16 +1175,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
+    let direct_arg = std::env::args_os().nth(1).map(PathBuf::from);
+    let open_archive_path = direct_arg.as_ref().filter(|p| p.is_file() && supported_archive(p)).cloned();
     let pending_paths = context_paths();
-    let initial_folder = pending_paths.first()
-        .and_then(|path| if path.is_dir() { Some(path.clone()) } else { path.parent().map(Path::to_path_buf) })
+    let initial_folder = open_archive_path.as_ref()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .or_else(|| pending_paths.first().and_then(|p| if p.is_dir() { Some(p.clone()) } else { p.parent().map(Path::to_path_buf) }))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let state = Rc::new(RefCell::new(AppState {
         folder: initial_folder,
+        archive: open_archive_path.clone(),
+        paths: Vec::new(),
         pending_paths,
-        ..Default::default()
     }));
-    status_error(&ui, show_folder(&ui, &state));
+    if let Some(archive_path) = open_archive_path {
+        status_error(&ui, show_archive(&ui, &state, archive_path));
+    } else {
+        status_error(&ui, show_folder(&ui, &state));
+    }
 
     { let weak = ui.as_weak(); let language = language.clone(); let state = state.clone();
       ui.on_toggle_language(move || {
