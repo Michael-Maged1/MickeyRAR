@@ -437,6 +437,9 @@ type CompressionWindow = ProgressWindow;
 struct AppState {
     folder: PathBuf,
     archive: Option<PathBuf>,
+    /// Current virtual directory inside the archive (e.g. "Blue Sky Lo-Fi/Fmp3/").
+    /// Empty string means the root of the archive.
+    archive_dir: String,
     paths: Vec<PathBuf>,
     pending_paths: Vec<PathBuf>,
 }
@@ -593,8 +596,17 @@ fn run_context_extraction_with_options(
     });
 
     let first_name = archives[0].file_name().unwrap_or_default().to_string_lossy().to_string();
-    ui.set_archive_name(first_name.clone().into());
-    ui.set_current_file(first_name.clone().into());
+    let total_archives_count = archives.len();
+    let current_archive_idx = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let initial_title = if total_archives_count > 1 {
+        format!("(1/{}) {}", total_archives_count, first_name)
+    } else {
+        first_name.clone()
+    };
+    let current_archive_title = Arc::new(std::sync::Mutex::new(initial_title.clone()));
+
+    ui.set_archive_name(initial_title.into());
+    ui.set_current_file("".into());
     ui.set_action_text(if arabic { "جاري استخراج" } else { "extracting" }.into());
 
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -635,11 +647,28 @@ fn run_context_extraction_with_options(
 
     let archives_worker = archives.clone();
     let password_worker = password.clone();
+    let worker_arch_idx = current_archive_idx.clone();
+    let worker_arch_title = current_archive_title.clone();
     let worker = thread::spawn(move || {
-        for archive in archives_worker {
+        for (idx, archive) in archives_worker.iter().enumerate() {
             if worker_cancelled.load(Ordering::Relaxed) { break; }
-            let abs_archive = if archive.is_absolute() { archive } else {
-                std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(&archive)
+            worker_arch_idx.store(idx, Ordering::Relaxed);
+            let name = archive.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let title = if total_archives_count > 1 {
+                format!("({}/{}) {}", idx + 1, total_archives_count, name)
+            } else {
+                name
+            };
+            if let Ok(mut lock) = worker_arch_title.lock() {
+                *lock = title;
+            }
+            worker_progress.percent.store(0, Ordering::Relaxed);
+            if let Ok(mut lock) = worker_progress.current_file.lock() {
+                lock.clear();
+            }
+
+            let abs_archive = if archive.is_absolute() { archive.clone() } else {
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(archive)
             };
             let dest = if let Some(ref t) = target_dir {
                 t.clone()
@@ -703,6 +732,8 @@ fn run_context_extraction_with_options(
     let weak = ui.as_weak();
     let timer_receiver = Arc::new(Mutex::new(receiver));
     let timer_progress = progress_handle.clone();
+    let timer_arch_idx = current_archive_idx.clone();
+    let timer_arch_title = current_archive_title.clone();
     let start_time = Instant::now();
     let timer = Timer::default();
     let mut shown_percent = u8::MAX;
@@ -717,26 +748,41 @@ fn run_context_extraction_with_options(
                 ui.set_current_file(cur_file.into());
             }
 
+            let arch_idx = timer_arch_idx.load(Ordering::Relaxed);
+            if let Ok(lock) = timer_arch_title.lock() {
+                if !lock.is_empty() {
+                    ui.set_archive_name(lock.clone().into());
+                }
+            }
+
+            let file_frac = (percent as f32 / 100.0).clamp(0.0, 1.0);
+            let total_frac = if total_archives_count > 0 {
+                ((arch_idx as f32 + file_frac) / (total_archives_count as f32)).clamp(0.0, 1.0)
+            } else {
+                file_frac
+            };
+            let total_percent = (total_frac * 100.0).round() as i32;
+
             let elapsed_secs = start_time.elapsed().as_secs();
             let elapsed_str = format!("{:02}:{:02}:{:02}", elapsed_secs / 3600, (elapsed_secs % 3600) / 60, elapsed_secs % 60);
             ui.set_elapsed_time(elapsed_str.into());
 
-            if percent > 0 && percent < 100 {
-                let total_est = (elapsed_secs as f64) / (percent as f64 / 100.0);
+            if total_percent > 0 && total_percent < 100 {
+                let total_est = (elapsed_secs as f64) / (total_frac as f64);
                 let rem_secs = (total_est - elapsed_secs as f64).max(0.0) as u64;
                 let rem_str = format!("{:02}:{:02}:{:02}", rem_secs / 3600, (rem_secs % 3600) / 60, rem_secs % 60);
                 ui.set_time_left(rem_str.into());
-            } else if percent >= 100 {
+            } else if total_percent >= 100 {
                 ui.set_time_left("00:00:00".into());
             } else {
                 ui.set_time_left("--:--:--".into());
             }
 
-            ui.set_progress(percent as f32 / 100.0);
-            ui.set_file_progress(percent as f32 / 100.0);
+            ui.set_progress(file_frac);
+            ui.set_file_progress(file_frac);
             ui.set_file_percent(percent as i32);
-            ui.set_total_progress(percent as f32 / 100.0);
-            ui.set_total_percent(percent as i32);
+            ui.set_total_progress(total_frac);
+            ui.set_total_percent(total_percent);
 
             if percent != shown_percent {
                 shown_percent = percent;
@@ -791,6 +837,109 @@ fn run_context_extraction_with_options(
     }
     drop(timer);
     Ok(())
+}
+
+fn coordinate_context_extraction(
+    operation: &str,
+    paths: Vec<PathBuf>,
+    arabic: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let queue_dir = std::env::temp_dir().join("MickeyRAR_Batch_Extract");
+    let _ = fs::create_dir_all(&queue_dir);
+
+    let req_id = format!("{}_{}", std::process::id(), Instant::now().elapsed().as_nanos());
+    let req_file = queue_dir.join(format!("req_{}.txt", req_id));
+
+    // Write this instance's requested files to the shared queue directory
+    let mut content = format!("{}\n", operation);
+    for p in &paths {
+        content.push_str(&p.to_string_lossy());
+        content.push('\n');
+    }
+    let _ = fs::write(&req_file, content);
+
+    // Attempt to acquire the master coordinator lock
+    #[cfg(windows)]
+    let (is_master, mutex_handle) = {
+        let mutex_name: Vec<u16> = "Local\\MickeyRAR_Extract_Coordinator\0".encode_utf16().collect();
+        let handle = unsafe {
+            windows_sys::Win32::System::Threading::CreateMutexW(
+                std::ptr::null(),
+                1,
+                mutex_name.as_ptr(),
+            )
+        };
+        let is_first = if handle.is_null() {
+            true
+        } else {
+            let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+            err != windows_sys::Win32::Foundation::ERROR_ALREADY_EXISTS
+        };
+        (is_first, handle)
+    };
+
+    #[cfg(not(windows))]
+    let (is_master, mutex_handle): (bool, *mut std::ffi::c_void) = (true, std::ptr::null_mut());
+
+    if !is_master {
+        // Another instance is already coordinating the extraction.
+        // Our request is already written in queue_dir, so exit cleanly without opening a window.
+        return Ok(());
+    }
+
+    // Master instance: wait briefly (220ms) for Windows Explorer to finish launching
+    // any sibling instances for other selected archives so they write their requests.
+    thread::sleep(Duration::from_millis(220));
+
+    // Collect all archives from queue_dir
+    let mut all_archives = Vec::new();
+    let mut final_op = operation.to_string();
+
+    if let Ok(entries) = fs::read_dir(&queue_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("txt") {
+                if let Ok(text) = fs::read_to_string(&path) {
+                    let mut lines = text.lines();
+                    if let Some(op) = lines.next() {
+                        if !op.trim().is_empty() {
+                            final_op = op.trim().to_string();
+                        }
+                    }
+                    for line in lines {
+                        let trimmed = line.trim();
+                        if !trimmed.is_empty() {
+                            let p = PathBuf::from(trimmed);
+                            if p.exists() && !all_archives.contains(&p) {
+                                all_archives.push(p);
+                            }
+                        }
+                    }
+                }
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+
+    if all_archives.is_empty() {
+        all_archives = paths;
+    }
+
+    let result = match final_op.as_str() {
+        "--extract-here" => run_context_extract_here(all_archives, arabic),
+        "--extract-to-folder" => run_context_extract_to_folder(all_archives, arabic),
+        "--extract-to" => run_context_extract_to(all_archives, arabic),
+        _ => run_context_extract_here(all_archives, arabic),
+    };
+
+    #[cfg(windows)]
+    if !mutex_handle.is_null() {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(mutex_handle);
+        }
+    }
+
+    result
 }
 
 fn run_context_extract_here(paths: Vec<PathBuf>, arabic: bool) -> Result<(), Box<dyn std::error::Error>> {
@@ -1345,6 +1494,17 @@ fn show_archive(ui: &MainWindow, state: &Rc<RefCell<AppState>>,
     }
     let members = list_archive_members(&archive)?;
     let arabic = ui.get_arabic_mode();
+    let current_dir = state.borrow().archive_dir.clone();
+
+    // Normalize current_dir: ensure it ends with '/' (or is empty for root)
+    let prefix = if current_dir.is_empty() {
+        String::new()
+    } else if current_dir.ends_with('/') {
+        current_dir.clone()
+    } else {
+        format!("{}/", current_dir)
+    };
+
     let mut entries = Vec::new();
     let mut total_folders = 0usize;
     let mut total_files = 0usize;
@@ -1363,41 +1523,198 @@ fn show_archive(ui: &MainWindow, state: &Rc<RefCell<AppState>>,
         is_selected: false,
     });
 
-    for m in members {
-        let (entry_type, icon_kind) = determine_type_and_icon(&m.path, m.is_dir, arabic);
-        let size_str = if m.is_dir {
-            total_folders += 1;
-            String::new()
-        } else {
-            total_files += 1;
-            total_bytes += m.size;
-            format_size(m.size)
-        };
-        let packed_str = if m.packed_size > 0 { format_size(m.packed_size) } else { String::new() };
-        let mod_str = if !m.modified.is_empty() {
-            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&m.modified, "%Y-%m-%d %H:%M:%S") {
+    // Collect unique child names at the current directory level.
+    // A "child" is either:
+    //  - A file directly under `prefix` (no further '/')
+    //  - A folder that is an intermediate segment under `prefix`
+    use std::collections::BTreeMap;
+    struct DirSummary {
+        size: u64,
+        packed: u64,
+        modified: String,
+        is_explicit: bool, // Was there an explicit dir entry for this folder?
+    }
+    let mut seen_dirs: BTreeMap<String, DirSummary> = BTreeMap::new();
+    // Collect file entries at current level
+    struct FileInfo {
+        display_name: String,
+        size: u64,
+        packed: u64,
+        modified: String,
+        crc: String,
+    }
+    let mut file_entries: Vec<FileInfo> = Vec::new();
+
+    for m in &members {
+        // Normalize path separators to '/'
+        let path = m.path.replace('\\', "/");
+        // Strip trailing '/' for directories
+        let path_trimmed = path.trim_end_matches('/');
+
+        // Check if this entry is under the current directory
+        if prefix.is_empty() {
+            // We're at root - show top-level entries
+            if let Some(slash_pos) = path_trimmed.find('/') {
+                // This is a nested entry; extract the top-level folder name
+                let folder_name = &path_trimmed[..slash_pos];
+                let entry = seen_dirs.entry(folder_name.to_string()).or_insert(DirSummary {
+                    size: 0,
+                    packed: 0,
+                    modified: String::new(),
+                    is_explicit: false,
+                });
+                if !m.is_dir {
+                    entry.size += m.size;
+                    entry.packed += m.packed_size;
+                }
+                if m.is_dir && path_trimmed == folder_name {
+                    entry.is_explicit = true;
+                    if entry.modified.is_empty() {
+                        entry.modified = m.modified.clone();
+                    }
+                }
+            } else {
+                // Top-level file or explicit top-level directory
+                if m.is_dir {
+                    let entry = seen_dirs.entry(path_trimmed.to_string()).or_insert(DirSummary {
+                        size: 0,
+                        packed: 0,
+                        modified: String::new(),
+                        is_explicit: true,
+                    });
+                    entry.is_explicit = true;
+                    if entry.modified.is_empty() {
+                        entry.modified = m.modified.clone();
+                    }
+                } else {
+                    file_entries.push(FileInfo {
+                        display_name: path_trimmed.to_string(),
+                        size: m.size,
+                        packed: m.packed_size,
+                        modified: m.modified.clone(),
+                        crc: m.crc.clone(),
+                    });
+                }
+            }
+        } else if path.starts_with(&prefix) || path_trimmed.starts_with(&prefix) {
+            // We're inside a subdirectory - show only entries under prefix
+            let relative = if path.starts_with(&prefix) {
+                &path[prefix.len()..]
+            } else {
+                &path_trimmed[prefix.len()..]
+            };
+            let relative = relative.trim_end_matches('/');
+            if relative.is_empty() {
+                continue; // This is the directory entry for the current dir itself
+            }
+
+            if let Some(slash_pos) = relative.find('/') {
+                // Nested further - show as folder
+                let folder_name = &relative[..slash_pos];
+                let entry = seen_dirs.entry(folder_name.to_string()).or_insert(DirSummary {
+                    size: 0,
+                    packed: 0,
+                    modified: String::new(),
+                    is_explicit: false,
+                });
+                if !m.is_dir {
+                    entry.size += m.size;
+                    entry.packed += m.packed_size;
+                }
+                if m.is_dir && relative == folder_name {
+                    entry.is_explicit = true;
+                    if entry.modified.is_empty() {
+                        entry.modified = m.modified.clone();
+                    }
+                }
+            } else {
+                // Direct child
+                if m.is_dir {
+                    let entry = seen_dirs.entry(relative.to_string()).or_insert(DirSummary {
+                        size: 0,
+                        packed: 0,
+                        modified: String::new(),
+                        is_explicit: true,
+                    });
+                    entry.is_explicit = true;
+                    if entry.modified.is_empty() {
+                        entry.modified = m.modified.clone();
+                    }
+                } else {
+                    file_entries.push(FileInfo {
+                        display_name: relative.to_string(),
+                        size: m.size,
+                        packed: m.packed_size,
+                        modified: m.modified.clone(),
+                        crc: m.crc.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    // Add folder entries first (sorted)
+    for (dir_name, summary) in &seen_dirs {
+        total_folders += 1;
+        let (entry_type, icon_kind) = determine_type_and_icon(dir_name, true, arabic);
+        let mod_str = if !summary.modified.is_empty() {
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&summary.modified, "%Y-%m-%d %H:%M:%S") {
                 dt.format("%d/%m/%Y %H:%M").to_string()
             } else {
-                m.modified
+                summary.modified.clone()
             }
         } else {
             String::new()
         };
-
         entries.push(FileEntry {
-            name: m.path.into(),
-            size: size_str.into(),
-            packed: packed_str.into(),
+            name: dir_name.clone().into(),
+            size: "".into(),
+            packed: "".into(),
             entry_type: entry_type.into(),
             modified: mod_str.into(),
-            crc32: m.crc.into(),
-            is_dir: m.is_dir,
+            crc32: "".into(),
+            is_dir: true,
             icon_kind: icon_kind.into(),
             is_selected: false,
         });
     }
 
-    ui.set_location(archive.display().to_string().into());
+    // Add file entries (sorted by name)
+    file_entries.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
+    for f in file_entries {
+        total_files += 1;
+        total_bytes += f.size;
+        let (entry_type, icon_kind) = determine_type_and_icon(&f.display_name, false, arabic);
+        let packed_str = if f.packed > 0 { format_size(f.packed) } else { String::new() };
+        let mod_str = if !f.modified.is_empty() {
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&f.modified, "%Y-%m-%d %H:%M:%S") {
+                dt.format("%d/%m/%Y %H:%M").to_string()
+            } else {
+                f.modified
+            }
+        } else {
+            String::new()
+        };
+        entries.push(FileEntry {
+            name: f.display_name.into(),
+            size: format_size(f.size).into(),
+            packed: packed_str.into(),
+            entry_type: entry_type.into(),
+            modified: mod_str.into(),
+            crc32: f.crc.into(),
+            is_dir: false,
+            icon_kind: icon_kind.into(),
+            is_selected: false,
+        });
+    }
+
+    // Update location bar: show archive path + virtual directory
+    let location = if current_dir.is_empty() {
+        archive.display().to_string()
+    } else {
+        format!("{}\\{}", archive.display(), current_dir.replace('/', "\\"))
+    };
+    ui.set_location(location.into());
     ui.set_entries(ModelRc::new(VecModel::from(entries)));
     ui.set_selected_index(-1);
     let sel_msg = if arabic {
@@ -1778,9 +2095,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match operation.as_str() {
             "--add" => return run_archive_dialog(paths, arabic),
             "--compress" | "--compress-email" => return run_context_compression(paths, arabic),
-            "--extract-here" => return run_context_extract_here(paths, arabic),
-            "--extract-to" => return run_context_extract_to(paths, arabic),
-            "--extract-to-folder" => return run_context_extract_to_folder(paths, arabic),
+            "--extract-here" | "--extract-to" | "--extract-to-folder" => {
+                return coordinate_context_extraction(operation.as_str(), paths, arabic);
+            }
             _ => {}
         }
     }
@@ -1842,6 +2159,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = Rc::new(RefCell::new(AppState {
         folder: initial_folder,
         archive: open_archive_path.clone(),
+        archive_dir: String::new(),
         paths: Vec::new(),
         pending_paths,
     }));
@@ -1873,8 +2191,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           if let Some(ui) = weak.upgrade() {
               let is_archive = state.borrow().archive.is_some();
               if is_archive {
-                  state.borrow_mut().archive = None;
-                  status_error(&ui, show_folder(&ui, &state));
+                  let current_dir = state.borrow().archive_dir.clone();
+                  if !current_dir.is_empty() {
+                      // Navigate up within the archive virtual directory
+                      let new_dir = if let Some(pos) = current_dir.trim_end_matches('/').rfind('/') {
+                          current_dir[..pos].to_string()
+                      } else {
+                          String::new() // Back to archive root
+                      };
+                      state.borrow_mut().archive_dir = new_dir;
+                      let archive = state.borrow().archive.clone().unwrap();
+                      status_error(&ui, show_archive(&ui, &state, archive));
+                  } else {
+                      // At archive root - exit archive view
+                      state.borrow_mut().archive = None;
+                      state.borrow_mut().archive_dir.clear();
+                      status_error(&ui, show_folder(&ui, &state));
+                  }
               } else {
                   let current = state.borrow().folder.clone();
                   if let Some(parent) = current.parent() {
@@ -1953,6 +2286,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       ui.on_choose_folder(move || {
         if let Some(folder) = rfd::FileDialog::new().pick_folder() {
             state.borrow_mut().folder = folder;
+            state.borrow_mut().archive = None;
+            state.borrow_mut().archive_dir.clear();
             if let Some(ui) = weak.upgrade() { status_error(&ui, show_folder(&ui, &state)); }
         }
       }); }
@@ -1968,8 +2303,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if entry == ".." {
                 let is_archive = state.borrow().archive.is_some();
                 if is_archive {
-                    state.borrow_mut().archive = None;
-                    status_error(&ui, show_folder(&ui, &state));
+                    let current_dir = state.borrow().archive_dir.clone();
+                    if !current_dir.is_empty() {
+                        // Navigate up within the archive virtual directory
+                        let new_dir = if let Some(pos) = current_dir.trim_end_matches('/').rfind('/') {
+                            current_dir[..pos].to_string()
+                        } else {
+                            String::new() // Back to archive root
+                        };
+                        state.borrow_mut().archive_dir = new_dir;
+                        let archive = state.borrow().archive.clone().unwrap();
+                        status_error(&ui, show_archive(&ui, &state, archive));
+                    } else {
+                        // At archive root - exit archive view
+                        state.borrow_mut().archive = None;
+                        state.borrow_mut().archive_dir.clear();
+                        status_error(&ui, show_folder(&ui, &state));
+                    }
                 } else {
                     let current = state.borrow().folder.clone();
                     if let Some(parent) = current.parent() {
@@ -1979,10 +2329,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 return;
             }
-            if state.borrow().archive.is_some() { ui.set_status(format!("Selected: {entry}").into()); return; }
+            if state.borrow().archive.is_some() {
+                // Inside an archive: navigate into the clicked folder
+                let current_dir = state.borrow().archive_dir.clone();
+                let new_dir = if current_dir.is_empty() {
+                    entry.to_string()
+                } else {
+                    format!("{}/{}", current_dir, entry)
+                };
+                state.borrow_mut().archive_dir = new_dir;
+                let archive = state.borrow().archive.clone().unwrap();
+                status_error(&ui, show_archive(&ui, &state, archive));
+                return;
+            }
             let p = state.borrow().folder.join(&entry);
             if p.is_dir() { state.borrow_mut().folder = p; status_error(&ui, show_folder(&ui, &state)); }
-            else if supported_archive(&p) { status_error(&ui, show_archive(&ui, &state, p)); }
+            else if supported_archive(&p) {
+                state.borrow_mut().archive_dir.clear();
+                status_error(&ui, show_archive(&ui, &state, p));
+            }
             else { ui.set_status(format!("Selected: {}", p.display()).into()); }
         }
       }); }
@@ -2002,12 +2367,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             is_dragging.set(true);
 
+            let is_archive = state.borrow().archive.is_some();
             let mut files_to_drag: Vec<String> = Vec::new();
+            let current_dir = state.borrow().archive_dir.clone();
             if clicked_entry.is_selected {
                 for i in 0..model.row_count() {
                     if let Some(entry) = model.row_data(i) {
                         if entry.is_selected && entry.name != ".." {
-                            files_to_drag.push(entry.name.to_string());
+                            let full_path = if is_archive && !current_dir.is_empty() {
+                                format!("{}/{}", current_dir.trim_end_matches('/'), entry.name)
+                            } else {
+                                entry.name.to_string()
+                            };
+                            files_to_drag.push(full_path);
                         }
                     }
                 }
@@ -2016,10 +2388,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_selected_index(idx);
             }
             if files_to_drag.is_empty() {
-                files_to_drag.push(clicked_entry.name.to_string());
+                let full_path = if is_archive && !current_dir.is_empty() {
+                    format!("{}/{}", current_dir.trim_end_matches('/'), clicked_entry.name)
+                } else {
+                    clicked_entry.name.to_string()
+                };
+                files_to_drag.push(full_path);
             }
 
-            let is_archive = state.borrow().archive.is_some();
             let arabic = ui.get_arabic_mode();
 
             if is_archive {
@@ -2125,7 +2501,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     { let weak = ui.as_weak(); let state = state.clone();
       ui.on_open_archive(move || {
         if let Some(p) = rfd::FileDialog::new().pick_file() {
-            if let Some(ui) = weak.upgrade() { status_error(&ui, show_archive(&ui, &state, p)); }
+            if let Some(ui) = weak.upgrade() {
+                state.borrow_mut().archive_dir.clear();
+                status_error(&ui, show_archive(&ui, &state, p));
+            }
         }
       }); }
     { let weak = ui.as_weak(); let state = state.clone(); let compression = compression.clone();
@@ -2161,10 +2540,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let model = ui.get_entries();
                     let count = model.row_count();
                     let mut selected_files = Vec::new();
+                    let current_dir = state.borrow().archive_dir.clone();
                     for i in 0..count {
                         if let Some(entry) = model.row_data(i) {
                             if entry.is_selected && entry.name != ".." {
-                                selected_files.push(entry.name.to_string());
+                                let full_path = if current_dir.is_empty() {
+                                    entry.name.to_string()
+                                } else {
+                                    format!("{}/{}", current_dir.trim_end_matches('/'), entry.name)
+                                };
+                                selected_files.push(full_path);
                             }
                         }
                     }
@@ -2263,6 +2648,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let is_archive = state.borrow().archive.is_some();
                 if is_archive {
                     let archive_path = state.borrow().archive.clone().unwrap();
+                    let current_dir = state.borrow().archive_dir.clone();
+                    let full_archive_item = if current_dir.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}/{}", current_dir.trim_end_matches('/'), name)
+                    };
                     let mut password: Option<String> = None;
                     match resolve_archive_password(&archive_path, ui.get_arabic_mode()).unwrap_or(None) {
                         Some(ref s) if s == "__CANCELLED__" => return,
@@ -2278,7 +2669,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         std::ffi::OsString::from("-y"),
                         out_flag,
                         archive_path.as_os_str().to_owned(),
-                        std::ffi::OsString::from(&name),
+                        std::ffi::OsString::from(&full_archive_item),
                     ];
                     if let Some(ref pwd) = password {
                         args.push(std::ffi::OsString::from(format!("-p{pwd}")));
@@ -2343,11 +2734,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(ui) = weak.upgrade() {
                 let model = ui.get_entries();
                 let count = model.row_count();
+                let is_archive = state.borrow().archive.is_some();
                 let mut to_delete = Vec::new();
+                let current_dir = state.borrow().archive_dir.clone();
                 for i in 0..count {
                     if let Some(e) = model.row_data(i) {
                         if e.is_selected && e.name != ".." {
-                            to_delete.push((e.name.to_string(), e.is_dir));
+                            let full_name = if is_archive && !current_dir.is_empty() {
+                                format!("{}/{}", current_dir.trim_end_matches('/'), e.name)
+                            } else {
+                                e.name.to_string()
+                            };
+                            to_delete.push((full_name, e.is_dir));
                         }
                     }
                 }
@@ -2356,7 +2754,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if sel_idx >= 0 && (sel_idx as usize) < count {
                         if let Some(e) = model.row_data(sel_idx as usize) {
                             if e.name != ".." {
-                                to_delete.push((e.name.to_string(), e.is_dir));
+                                let full_name = if is_archive && !current_dir.is_empty() {
+                                    format!("{}/{}", current_dir.trim_end_matches('/'), e.name)
+                                } else {
+                                    e.name.to_string()
+                                };
+                                to_delete.push((full_name, e.is_dir));
                             }
                         }
                     }
@@ -2367,7 +2770,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 }
 
-                let is_archive = state.borrow().archive.is_some();
                 if is_archive {
                     let archive_path = state.borrow().archive.clone().unwrap();
                     let mut args = vec![
@@ -2566,6 +2968,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if t.exists() {
                         state.borrow_mut().folder = t.clone();
                         state.borrow_mut().archive = None;
+                        state.borrow_mut().archive_dir.clear();
                         let _ = show_folder(&ui, &state);
                         let arabic = ui.get_arabic_mode();
                         let fav_name = match fav.as_str() {

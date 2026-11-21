@@ -169,11 +169,15 @@ pub fn run_7z_cancellable_with_progress(
         let err_output = Arc::new(std::sync::Mutex::new(String::new()));
         let err_output_clone = err_output.clone();
         if progress.is_some() && !args.is_empty() {
-            // Keep the operation switch first, then ask 7-Zip for progress data.
-            command.arg(&args[0]).arg("-bsp1").args(&args[1..]);
+            // Keep the operation switch first, then ask 7-Zip for progress data in UTF-8.
+            command.arg(&args[0])
+                .arg("-bsp1")
+                .arg("-bb1")
+                .arg("-sccUTF-8")
+                .args(&args[1..]);
             command.stdout(Stdio::piped()).stderr(Stdio::piped());
         } else {
-            command.args(args).stdout(Stdio::null()).stderr(Stdio::piped());
+            command.arg("-sccUTF-8").args(args).stdout(Stdio::null()).stderr(Stdio::piped());
         }
         #[cfg(windows)]
         command.creation_flags(CREATE_NO_WINDOW);
@@ -323,7 +327,7 @@ fn read_progress_percentages(mut stream: impl Read, progress: Option<ProgressHan
     let mut buffer = [0u8; 4096];
     let mut digits = String::new();
     let mut highest: u8 = 0;
-    let mut line_buf = String::new();
+    let mut line_bytes: Vec<u8> = Vec::new();
     loop {
         let read = match stream.read(&mut buffer) {
             Ok(0) | Err(_) => break,
@@ -331,28 +335,48 @@ fn read_progress_percentages(mut stream: impl Read, progress: Option<ProgressHan
         };
         for &byte in &buffer[..read] {
             if byte == b'\r' || byte == b'\n' {
-                if !line_buf.is_empty() {
-                    if let Some(pos) = line_buf.find('%') {
-                        let after = line_buf[pos + 1..].trim();
-                        let fname = if let Some(dash) = after.find(" - ") {
-                            after[dash + 3..].trim()
-                        } else if let Some(plus) = after.find(" + ") {
-                            after[plus + 3..].trim()
+                if !line_bytes.is_empty() {
+                    let line_str = String::from_utf8_lossy(&line_bytes);
+                    let trimmed = line_str.trim();
+                    if !trimmed.is_empty() {
+                        let fname_opt = if let Some(dash) = trimmed.find(" - ") {
+                            Some(trimmed[dash + 3..].trim())
+                        } else if let Some(plus) = trimmed.find(" + ") {
+                            Some(trimmed[plus + 3..].trim())
+                        } else if let Some(rest) = trimmed.strip_prefix("- ") {
+                            Some(rest.trim())
+                        } else if let Some(rest) = trimmed.strip_prefix("+ ") {
+                            Some(rest.trim())
+                        } else if let Some(rest) = trimmed.strip_prefix("Extracting") {
+                            Some(rest.trim())
                         } else {
-                            after.trim_start_matches(|c: char| c == '+' || c == '-' || c.is_whitespace()).trim()
+                            None
                         };
-                        if !fname.is_empty() && !fname.starts_with("Everything is Ok") {
-                            if let Some(handle) = &progress {
-                                if let Ok(mut lock) = handle.current_file.lock() {
-                                    *lock = fname.to_string();
+
+                        if let Some(fname) = fname_opt {
+                            let clean = fname.trim_end_matches(|c| c == '/' || c == '\\').trim();
+                            if !clean.is_empty()
+                                && !clean.starts_with("Everything is Ok")
+                                && !clean.starts_with("Scanning")
+                                && !clean.starts_with("Creating archive")
+                                && !clean.starts_with("Extracting archive")
+                                && !clean.starts_with("Folders:")
+                                && !clean.starts_with("Files:")
+                                && !clean.starts_with("Size:")
+                                && !clean.starts_with("Compressed:")
+                            {
+                                if let Some(handle) = &progress {
+                                    if let Ok(mut lock) = handle.current_file.lock() {
+                                        *lock = clean.to_string();
+                                    }
                                 }
                             }
                         }
                     }
-                    line_buf.clear();
+                    line_bytes.clear();
                 }
             } else {
-                line_buf.push(byte as char);
+                line_bytes.push(byte);
             }
 
             if byte.is_ascii_digit() {
