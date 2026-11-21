@@ -662,7 +662,7 @@ export component MainWindow inherits Window {
                             if (self.pressed && !self.is-dragging-row) {
                                 let dx = self.mouse-x - self.press-x;
                                 let dy = self.mouse-y - self.press-y;
-                                if (dx > 5px || dx < -5px || dy > 5px || dy < -5px) {
+                                if (dx > 25px || dx < -25px || dy > 25px || dy < -25px) {
                                     self.is-dragging-row = true;
                                     root.start-drag(idx);
                                 }

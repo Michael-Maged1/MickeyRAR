@@ -169,15 +169,15 @@ pub fn run_7z_cancellable_with_progress(
         let err_output = Arc::new(std::sync::Mutex::new(String::new()));
         let err_output_clone = err_output.clone();
         if progress.is_some() && !args.is_empty() {
-            // Keep the operation switch first, then ask 7-Zip for progress data in UTF-8.
+            // Keep the operation switch first, then ask 7-Zip for progress data in UTF-8 with multi-threading.
             command.arg(&args[0])
                 .arg("-bsp1")
-                .arg("-bb1")
+                .arg("-mmt=on")
                 .arg("-sccUTF-8")
                 .args(&args[1..]);
             command.stdout(Stdio::piped()).stderr(Stdio::piped());
         } else {
-            command.arg("-sccUTF-8").args(args).stdout(Stdio::null()).stderr(Stdio::piped());
+            command.arg("-mmt=on").arg("-sccUTF-8").args(args).stdout(Stdio::null()).stderr(Stdio::piped());
         }
         #[cfg(windows)]
         command.creation_flags(CREATE_NO_WINDOW);
@@ -367,7 +367,9 @@ fn read_progress_percentages(mut stream: impl Read, progress: Option<ProgressHan
                             {
                                 if let Some(handle) = &progress {
                                     if let Ok(mut lock) = handle.current_file.lock() {
-                                        *lock = clean.to_string();
+                                        if *lock != clean {
+                                            *lock = clean.to_string();
+                                        }
                                     }
                                 }
                             }

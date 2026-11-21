@@ -437,6 +437,9 @@ type CompressionWindow = ProgressWindow;
 struct AppState {
     folder: PathBuf,
     archive: Option<PathBuf>,
+    /// In-memory cache of the parsed archive contents: (archive_path, items).
+    /// Avoids re-invoking 7-Zip synchronously on every folder navigation inside large archives.
+    archive_members: Option<(PathBuf, Vec<ArchiveItem>)>,
     /// Current virtual directory inside the archive (e.g. "Blue Sky Lo-Fi/Fmp3/").
     /// Empty string means the root of the archive.
     archive_dir: String,
@@ -689,6 +692,7 @@ fn run_context_extraction_with_options(
                 std::ffi::OsString::from("x"),
                 std::ffi::OsString::from("-y"),
                 std::ffi::OsString::from("-aoa"),
+                std::ffi::OsString::from("-mmt=on"),
                 output_arg,
                 abs_archive.as_os_str().to_owned(),
             ];
@@ -1397,6 +1401,7 @@ fn list_member_names(archive: &Path) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+#[derive(Clone)]
 struct ArchiveItem {
     path: String,
     size: u64,
@@ -1407,7 +1412,13 @@ struct ArchiveItem {
 }
 
 fn list_archive_members(archive: &Path) -> Result<Vec<ArchiveItem>, String> {
-    let out = run_text_args(&["l".as_ref(), "-slt".as_ref(), archive.as_os_str()])?;
+    let out = run_text_args(&[
+        "l".as_ref(),
+        "-slt".as_ref(),
+        "-sccUTF-8".as_ref(),
+        "-mmt=on".as_ref(),
+        archive.as_os_str(),
+    ])?;
     let mut in_contents = false;
     let mut items = Vec::new();
     let mut current_path: Option<String> = None;
@@ -1492,7 +1503,26 @@ fn show_archive(ui: &MainWindow, state: &Rc<RefCell<AppState>>,
     if !supported_archive(&archive) {
         return Err(format!("Unsupported archive format: {}", archive.display()));
     }
-    let members = list_archive_members(&archive)?;
+    let cached_members = {
+        let s = state.borrow();
+        if let Some((ref cached_path, ref mems)) = s.archive_members {
+            if cached_path == &archive {
+                Some(mems.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+    let members = match cached_members {
+        Some(mems) => mems,
+        None => {
+            let mems = list_archive_members(&archive)?;
+            state.borrow_mut().archive_members = Some((archive.clone(), mems.clone()));
+            mems
+        }
+    };
     let arabic = ui.get_arabic_mode();
     let current_dir = state.borrow().archive_dir.clone();
 
@@ -1971,6 +2001,7 @@ fn run_in_app_extraction(
             std::ffi::OsString::from("x"),
             std::ffi::OsString::from("-y"),
             std::ffi::OsString::from("-aoa"),
+            std::ffi::OsString::from("-mmt=on"),
             output_arg,
             archive_clone.as_os_str().to_owned(),
         ];
@@ -2159,6 +2190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = Rc::new(RefCell::new(AppState {
         folder: initial_folder,
         archive: open_archive_path.clone(),
+        archive_members: None,
         archive_dir: String::new(),
         paths: Vec::new(),
         pending_paths,
@@ -2206,6 +2238,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                       // At archive root - exit archive view
                       state.borrow_mut().archive = None;
                       state.borrow_mut().archive_dir.clear();
+                      state.borrow_mut().archive_members = None;
                       status_error(&ui, show_folder(&ui, &state));
                   }
               } else {
@@ -2288,11 +2321,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             state.borrow_mut().folder = folder;
             state.borrow_mut().archive = None;
             state.borrow_mut().archive_dir.clear();
+            state.borrow_mut().archive_members = None;
             if let Some(ui) = weak.upgrade() { status_error(&ui, show_folder(&ui, &state)); }
         }
       }); }
     { let weak = ui.as_weak(); let state = state.clone();
       ui.on_refresh(move || { if let Some(ui) = weak.upgrade() {
+          state.borrow_mut().archive_members = None;
           let archive = state.borrow().archive.clone();
           let result = match archive { Some(p) => show_archive(&ui, &state, p), None => show_folder(&ui, &state) };
           status_error(&ui, result);
@@ -2318,6 +2353,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // At archive root - exit archive view
                         state.borrow_mut().archive = None;
                         state.borrow_mut().archive_dir.clear();
+                        state.borrow_mut().archive_members = None;
                         status_error(&ui, show_folder(&ui, &state));
                     }
                 } else {
@@ -2343,8 +2379,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
             let p = state.borrow().folder.join(&entry);
-            if p.is_dir() { state.borrow_mut().folder = p; status_error(&ui, show_folder(&ui, &state)); }
+            if p.is_dir() {
+                state.borrow_mut().archive_members = None;
+                state.borrow_mut().folder = p;
+                status_error(&ui, show_folder(&ui, &state));
+            }
             else if supported_archive(&p) {
+                state.borrow_mut().archive_members = None;
                 state.borrow_mut().archive_dir.clear();
                 status_error(&ui, show_archive(&ui, &state, p));
             }
@@ -2427,6 +2468,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         std::ffi::OsString::from("x"),
                         std::ffi::OsString::from("-y"),
                         std::ffi::OsString::from("-aoa"),
+                        std::ffi::OsString::from("-mmt=on"),
                         out_flag,
                         archive_path.as_os_str().to_owned(),
                     ];
@@ -2502,6 +2544,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       ui.on_open_archive(move || {
         if let Some(p) = rfd::FileDialog::new().pick_file() {
             if let Some(ui) = weak.upgrade() {
+                state.borrow_mut().archive_members = None;
                 state.borrow_mut().archive_dir.clear();
                 status_error(&ui, show_archive(&ui, &state, p));
             }
@@ -2782,6 +2825,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     match run_7z(&args, None) {
                         Ok(_) => {
+                            state.borrow_mut().archive_members = None;
                             let _ = show_archive(&ui, &state, archive_path);
                             ui.set_status(if ui.get_arabic_mode() {
                                 format!("تم حذف {} عنصر من الأرشيف بنجاح", to_delete.len()).into()
@@ -2969,6 +3013,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         state.borrow_mut().folder = t.clone();
                         state.borrow_mut().archive = None;
                         state.borrow_mut().archive_dir.clear();
+                        state.borrow_mut().archive_members = None;
                         let _ = show_folder(&ui, &state);
                         let arabic = ui.get_arabic_mode();
                         let fav_name = match fav.as_str() {
