@@ -145,7 +145,7 @@ fn register_context_menu(executable: &PathBuf) {
     registry_value(&format!(r"{prog_id}\DefaultIcon"), "", &format!("\"{executable}\",0"));
     registry_value(&format!(r"{prog_id}\shell\open\command"), "", &format!("\"{executable}\" \"%1\""));
 
-    for ext in [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".iso"] {
+    for ext in [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".iso", ".cab", ".wim", ".tgz"] {
         let ext_key = format!(r"HKLM\Software\Classes\{ext}\OpenWithProgids");
         registry_value(&ext_key, "MickeyRAR.Archive", "");
     }

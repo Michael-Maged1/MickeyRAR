@@ -1203,7 +1203,10 @@ fn run_archive_dialog(paths: Vec<PathBuf>, arabic: bool) -> Result<(), Box<dyn s
 
 fn supported_archive(p: &Path) -> bool {
     p.extension().and_then(|s| s.to_str()).map(|e| {
-        matches!(e.to_ascii_lowercase().as_str(), "zip" | "7z" | "rar" | "tar" | "gz" | "bz2" | "xz")
+        matches!(
+            e.to_ascii_lowercase().as_str(),
+            "zip" | "7z" | "rar" | "tar" | "gz" | "bz2" | "xz" | "iso" | "cab" | "wim" | "tgz" | "tbz2" | "txz" | "z"
+        )
     }).unwrap_or(false)
 }
 
