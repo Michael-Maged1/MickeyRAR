@@ -3146,9 +3146,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(ui) = weak.upgrade() {
                 let arabic = ui.get_arabic_mode();
                 let msg = if arabic {
-                    "Mickey RAR v0.5.0 - البرنامج الاحترافي لإدارة وضغط الملفات Ultra LZMA2 | تطوير مايكل ماجد"
+                    format!("Mickey RAR v{} - البرنامج الاحترافي لإدارة وضغط الملفات Ultra LZMA2 | تطوير مايكل ماجد", CURRENT_VERSION)
                 } else {
-                    "Mickey RAR v0.5.0 - High Performance Archive Manager with Ultra LZMA2 by Michael Maged"
+                    format!("Mickey RAR v{} - High Performance Archive Manager with Ultra LZMA2 by Michael Maged", CURRENT_VERSION)
                 };
                 ui.set_status(msg.into());
             }

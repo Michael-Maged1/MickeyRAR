@@ -210,7 +210,7 @@ fn register_uninstall(install_dir: &PathBuf, executable: &PathBuf, uninstaller: 
     let key = r"HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\MickeyRAR";
     let values = [
         ("DisplayName", "Mickey RAR".to_string()),
-        ("DisplayVersion", "0.5.0".to_string()),
+        ("DisplayVersion", env!("CARGO_PKG_VERSION").to_string()),
         ("Publisher", "Michael Maged".to_string()),
         ("InstallLocation", install_dir.display().to_string()),
         ("DisplayIcon", executable.display().to_string()),
