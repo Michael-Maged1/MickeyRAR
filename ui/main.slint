@@ -253,6 +253,7 @@ export component MainWindow inherits Window {
     callback open-entry(string);
     callback start-drag(int);
     callback save-compression-settings(string, bool);
+    callback set-default-app();
     callback open-url(string);
     callback toolbar-info(string);
 
@@ -1014,6 +1015,7 @@ export component MainWindow inherits Window {
             spacing: 1px;
 
             DropdownMenuItem { text: root.arabic-mode ? "إعدادات الضغط الفائق Ultra..." : "Compression Settings (Ultra)..."; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.show-settings = true; } }
+            DropdownMenuItem { text: root.arabic-mode ? "تعيين كبرنامج افتراضي لملفات الأرشيف" : "Set as Default Archive Manager"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.set-default-app(); } }
             DropdownMenuItem { text: root.arabic-mode ? "تبديل المظهر: داكن / فاتح" : "Toggle Theme: Dark / Light"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.toggle-theme(); } }
             DropdownMenuItem { text: root.arabic-mode ? "تغيير اللغة: English" : "Switch Language: العربية"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.toggle-language(); } }
         }

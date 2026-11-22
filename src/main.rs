@@ -1766,6 +1766,83 @@ fn show_archive(ui: &MainWindow, state: &Rc<RefCell<AppState>>,
     Ok(())
 }
 
+#[cfg(windows)]
+fn register_file_associations() -> Result<(), String> {
+    use std::process::Command;
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_str = executable.display().to_string();
+
+    let extensions = [
+        ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".iso", ".cab", ".wim", ".tgz", ".tbz2", ".txz",
+    ];
+
+    let reg_val = |key: &str, name: &str, val: &str| {
+        let mut cmd = Command::new("reg.exe");
+        cmd.creation_flags(0x08000000);
+        cmd.args(["ADD", key]);
+        if name.is_empty() { cmd.arg("/ve"); } else { cmd.args(["/v", name]); }
+        let _ = cmd.args(["/t", "REG_SZ", "/d", val, "/f"]).status();
+    };
+
+    let reg_del = |key: &str| {
+        let mut cmd = Command::new("reg.exe");
+        cmd.creation_flags(0x08000000);
+        let _ = cmd.args(["DELETE", key, "/f"]).status();
+    };
+
+    for base in [r"HKCU\Software\Classes", r"HKLM\Software\Classes"] {
+        let prog_id = format!(r"{base}\MickeyRAR.Archive");
+        reg_val(&prog_id, "", "Mickey RAR Archive");
+        reg_val(&format!(r"{prog_id}\DefaultIcon"), "", &format!("\"{exe_str}\",0"));
+        reg_val(&format!(r"{prog_id}\shell"), "", "open");
+        reg_val(&format!(r"{prog_id}\shell\open"), "FriendlyAppName", "Mickey RAR");
+        reg_val(&format!(r"{prog_id}\shell\open\command"), "", &format!("\"{exe_str}\" \"%1\""));
+
+        for ext in &extensions {
+            let ext_key = format!(r"{base}\{ext}");
+            reg_val(&ext_key, "", "MickeyRAR.Archive");
+            let ext_open = format!(r"{ext_key}\OpenWithProgids");
+            reg_val(&ext_open, "MickeyRAR.Archive", "");
+        }
+    }
+
+    for ext in &extensions {
+        reg_del(&format!(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\UserChoice"));
+        reg_del(&format!(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\UserChoiceLatest"));
+    }
+
+    for base in [r"HKCU\Software", r"HKLM\Software"] {
+        let cap = format!(r"{base}\MickeyRAR\Capabilities");
+        reg_val(&cap, "ApplicationName", "Mickey RAR");
+        reg_val(&cap, "ApplicationDescription", "Mickey RAR classic archive manager");
+        for ext in &extensions {
+            reg_val(&format!(r"{cap}\FileAssociations"), ext, "MickeyRAR.Archive");
+        }
+        reg_val(&format!(r"{base}\RegisteredApplications"), "MickeyRAR", r"Software\MickeyRAR\Capabilities");
+    }
+
+    for base in [r"HKCU\Software\Classes\Applications", r"HKLM\Software\Classes\Applications"] {
+        let app_entry = format!(r"{base}\mickey-rar.exe");
+        reg_val(&app_entry, "FriendlyAppName", "Mickey RAR");
+        reg_val(&format!(r"{app_entry}\DefaultIcon"), "", &format!("\"{exe_str}\",0"));
+        reg_val(&format!(r"{app_entry}\shell\open\command"), "", &format!("\"{exe_str}\" \"%1\""));
+        for ext in &extensions {
+            reg_val(&format!(r"{app_entry}\SupportedTypes"), ext, "");
+        }
+    }
+
+    unsafe {
+        windows_sys::Win32::UI::Shell::SHChangeNotify(
+            windows_sys::Win32::UI::Shell::SHCNE_ASSOCCHANGED as i32,
+            windows_sys::Win32::UI::Shell::SHCNF_IDLIST,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+    }
+
+    Ok(())
+}
+
 fn save_rgba_as_bmp(width: u32, height: u32, rgba: &[u8], path: &Path) -> std::io::Result<()> {
     use std::io::Write;
     let mut file = std::fs::File::create(path)?;
@@ -2316,6 +2393,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
       }); }
+
+    {
+        let weak = ui.as_weak();
+        ui.on_set_default_app(move || {
+            if let Some(ui) = weak.upgrade() {
+                #[cfg(windows)]
+                {
+                    match register_file_associations() {
+                        Ok(()) => {
+                            let msg = if ui.get_arabic_mode() {
+                                "تم تعيين Mickey RAR كبرنامج افتراضي وتحديث أيقونات الأرشيف بنجاح ✔"
+                            } else {
+                                "Mickey RAR set as default archive manager successfully ✔"
+                            };
+                            ui.set_status(msg.into());
+                            let _ = webbrowser::open("ms-settings:defaultapps");
+                        }
+                        Err(e) => ui.set_status(format!("Association error: {e}").into()),
+                    }
+                }
+            }
+        });
+    }
 
 
     { let weak = ui.as_weak(); let state = state.clone();

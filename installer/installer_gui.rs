@@ -140,14 +140,69 @@ fn register_context_menu(executable: &PathBuf) {
         registry_value(target, "Icon", &format!("\"{executable}\",0"));
     }
 
-    let prog_id = r"HKLM\Software\Classes\MickeyRAR.Archive";
-    registry_value(prog_id, "", "Mickey RAR Archive");
-    registry_value(&format!(r"{prog_id}\DefaultIcon"), "", &format!("\"{executable}\",0"));
-    registry_value(&format!(r"{prog_id}\shell\open\command"), "", &format!("\"{executable}\" \"%1\""));
+    let extensions = [
+        ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".iso", ".cab", ".wim", ".tgz", ".tbz2", ".txz",
+    ];
 
-    for ext in [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".iso", ".cab", ".wim", ".tgz"] {
-        let ext_key = format!(r"HKLM\Software\Classes\{ext}\OpenWithProgids");
-        registry_value(&ext_key, "MickeyRAR.Archive", "");
+    for base in [r"HKLM\Software\Classes", r"HKCU\Software\Classes"] {
+        let prog_id = format!(r"{base}\MickeyRAR.Archive");
+        registry_value(&prog_id, "", "Mickey RAR Archive");
+        registry_value(&format!(r"{prog_id}\DefaultIcon"), "", &format!("\"{executable}\",0"));
+        registry_value(&format!(r"{prog_id}\shell"), "", "open");
+        registry_value(&format!(r"{prog_id}\shell\open"), "FriendlyAppName", "Mickey RAR");
+        registry_value(&format!(r"{prog_id}\shell\open\command"), "", &format!("\"{executable}\" \"%1\""));
+
+        for ext in &extensions {
+            let ext_key = format!(r"{base}\{ext}");
+            registry_value(&ext_key, "", "MickeyRAR.Archive");
+            let ext_open = format!(r"{ext_key}\OpenWithProgids");
+            registry_value(&ext_open, "MickeyRAR.Archive", "");
+        }
+    }
+
+    // Clear broken/orphaned UserChoice in FileExts so Windows falls back to our ProgID
+    for ext in &extensions {
+        registry_delete(&format!(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\UserChoice"));
+        registry_delete(&format!(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\UserChoiceLatest"));
+    }
+
+    // Register Capabilities for Windows 10/11 Default Apps
+    for base in [r"HKLM\Software", r"HKCU\Software"] {
+        let cap = format!(r"{base}\MickeyRAR\Capabilities");
+        registry_value(&cap, "ApplicationName", "Mickey RAR");
+        registry_value(&cap, "ApplicationDescription", "Mickey RAR archive manager");
+        for ext in &extensions {
+            registry_value(&format!(r"{cap}\FileAssociations"), ext, "MickeyRAR.Archive");
+        }
+        registry_value(&format!(r"{base}\RegisteredApplications"), "MickeyRAR", r"Software\MickeyRAR\Capabilities");
+    }
+
+    // Register Applications\mickey-rar.exe
+    for base in [r"HKLM\Software\Classes\Applications", r"HKCU\Software\Classes\Applications"] {
+        let app_entry = format!(r"{base}\mickey-rar.exe");
+        registry_value(&app_entry, "FriendlyAppName", "Mickey RAR");
+        registry_value(&format!(r"{app_entry}\DefaultIcon"), "", &format!("\"{executable}\",0"));
+        registry_value(&format!(r"{app_entry}\shell\open\command"), "", &format!("\"{executable}\" \"%1\""));
+        for ext in &extensions {
+            registry_value(&format!(r"{app_entry}\SupportedTypes"), ext, "");
+        }
+    }
+
+    // App Paths
+    let app_paths = r"HKLM\Software\Microsoft\Windows\CurrentVersion\App Paths\mickey-rar.exe";
+    registry_value(app_paths, "", &executable);
+    if let Some(parent) = std::path::Path::new(&executable).parent() {
+        registry_value(app_paths, "Path", &parent.display().to_string());
+    }
+
+    #[cfg(windows)]
+    unsafe {
+        windows_sys::Win32::UI::Shell::SHChangeNotify(
+            windows_sys::Win32::UI::Shell::SHCNE_ASSOCCHANGED as i32,
+            windows_sys::Win32::UI::Shell::SHCNF_IDLIST,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
     }
 }
 
