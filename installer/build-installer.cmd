@@ -7,4 +7,5 @@ set RUSTFLAGS=-C debuginfo=0 -C link-arg=/DEBUG:NONE
 if errorlevel 1 exit /b %errorlevel%
 "C:\Users\micha\.cargo\bin\cargo.exe" build --release --bin mickey-rar-installer
 if errorlevel 1 exit /b %errorlevel%
-copy /Y target\release\mickey-rar-installer.exe installer\MickeyRAR-Setup.exe >nul
+copy /Y target\release\mickey-rar-installer.exe installer\MickeyRAR-Setup-v0.6.1.exe >nul
+if exist installer\MickeyRAR-Setup.exe del /f /q installer\MickeyRAR-Setup.exe >nul

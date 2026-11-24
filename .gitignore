@@ -6,7 +6,7 @@ Cargo.lock.bak
 # Large binary files & generated installers
 *.exe
 !installer/runtime/7z.exe
-!installer/MickeyRAR-Setup.exe
+!installer/MickeyRAR-Setup*.exe
 
 # Windows Resource files
 installer/*.res

@@ -2773,10 +2773,16 @@ fn parse_github_release_json(json_str: &str, current_version: &str) -> Option<Up
         return None;
     }
 
-    let target_ext = if cfg!(target_os = "macos") { ".dmg" } else { "setup.exe" };
     let dl_url = extract_all_json_strings_after_key(json_str, "browser_download_url")
         .into_iter()
-        .find(|u| u.to_lowercase().ends_with(target_ext))
+        .find(|u| {
+            let lower = u.to_lowercase();
+            if cfg!(target_os = "macos") {
+                lower.ends_with(".dmg")
+            } else {
+                lower.contains("setup") && lower.ends_with(".exe")
+            }
+        })
         .or_else(|| Some(default_release_asset_url(&tag_name)));
 
     let raw_body = extract_json_string_after_key(json_str, "body").unwrap_or_default();
