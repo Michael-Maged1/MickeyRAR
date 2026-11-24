@@ -78,6 +78,7 @@ jobs:
             echo "Creating official GitHub Release $VERSION..."
             cat <<'EOF' > release_notes.md
           ### What's New / أبرز التحسينات الجديدة
+          - **Fixed In-App Auto-Updater (`v0.6.1`):** Fixed minified JSON parsing for GitHub Releases API, added HTTP redirect fallback (immune to API rate limits), interactive in-app Update Dialog, binary integrity check, and automatic closing of running app instances during upgrade.
           - **Fast Password Verification:** Instant password validation via header/smallest-file testing without decompressing multi-GB archives twice, plus full browsing of encrypted-header archives (`.7z -mhe=on`, `.rar -hp`).
           - **True Pause & Resume:** Real OS-level process suspension/resuming (`NtSuspendProcess` / `NtResumeProcess`) with accurate elapsed & remaining timers.
           - **In-App Archive Creation, AES-256 Encryption & SFX (.exe):** Full bilingual dialog supporting `ZIP`, `7Z`, and self-extracting `SFX (.exe)` archives with password protection and filename encryption.

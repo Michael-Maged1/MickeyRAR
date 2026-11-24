@@ -271,8 +271,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let seven_zip_sfx = install_dir.join("7z.sfx");
         let uninstaller = install_dir.join("uninstall.exe");
         let icon_file = install_dir.join("icon.ico");
-        if fs::create_dir_all(&install_dir).is_err()
-            || fs::write(&executable, PROGRAM_BYTES).is_err()
+
+        // Close any running Mickey RAR instance so Windows releases file locks during upgrade
+        let mut kill_cmd = Command::new("taskkill.exe");
+        kill_cmd.creation_flags(CREATE_NO_WINDOW);
+        let _ = kill_cmd.args(["/F", "/IM", "mickey-rar.exe"]).status();
+
+        if fs::create_dir_all(&install_dir).is_err() {
+            std::process::exit(1);
+        }
+        let mut wrote_exe = false;
+        for _ in 0..15 {
+            if fs::write(&executable, PROGRAM_BYTES).is_ok() {
+                wrote_exe = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        if !wrote_exe
             || fs::write(&seven_zip, SEVEN_ZIP_BYTES).is_err()
             || fs::write(&seven_zip_dll, SEVEN_ZIP_DLL_BYTES).is_err()
             || fs::write(&seven_zip_sfx, SEVEN_ZIP_SFX_BYTES).is_err()

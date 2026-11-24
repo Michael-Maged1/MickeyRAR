@@ -2399,20 +2399,175 @@ where
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const GITHUB_REPO: &str = "Michael-Maged1/MickeyRAR";
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct UpdateInfo {
     version: String,
     download_url: Option<String>,
+    notes_summary: String,
 }
 
 fn is_version_newer(remote: &str, current: &str) -> bool {
-    let r_parts: Vec<u32> = remote.split('.').filter_map(|s| s.parse().ok()).collect();
-    let c_parts: Vec<u32> = current.split('.').filter_map(|s| s.parse().ok()).collect();
-    for (r, c) in r_parts.iter().zip(c_parts.iter()) {
-        if r > c { return true; }
-        if r < c { return false; }
+    let clean_r = remote.trim().trim_start_matches(['v', 'V']);
+    let clean_c = current.trim().trim_start_matches(['v', 'V']);
+    let r_parts: Vec<u32> = clean_r
+        .split(['.', '-', '+'])
+        .take(3)
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    let c_parts: Vec<u32> = clean_c
+        .split(['.', '-', '+'])
+        .take(3)
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    if r_parts.is_empty() {
+        return false;
     }
-    r_parts.len() > c_parts.len()
+    for i in 0..r_parts.len().max(c_parts.len()) {
+        let r = r_parts.get(i).copied().unwrap_or(0);
+        let c = c_parts.get(i).copied().unwrap_or(0);
+        if r > c {
+            return true;
+        }
+        if r < c {
+            return false;
+        }
+    }
+    false
+}
+
+/// Extracts all string values for `"<key>": "<value>"` from both minified single-line
+/// and pretty-printed multi-line JSON without external crate dependencies.
+fn extract_all_json_strings_after_key(json: &str, key: &str) -> Vec<String> {
+    let needle = format!("\"{key}\"");
+    let mut results = Vec::new();
+    let mut search_from = 0;
+
+    while let Some(rel_pos) = json[search_from..].find(&needle) {
+        let after_key = search_from + rel_pos + needle.len();
+        search_from = after_key;
+
+        let rest = json[after_key..].trim_start();
+        let Some(after_colon) = rest.strip_prefix(':') else {
+            continue;
+        };
+        let after_colon = after_colon.trim_start();
+        let Some(str_body) = after_colon.strip_prefix('"') else {
+            continue;
+        };
+
+        let mut value = String::new();
+        let mut chars = str_body.chars();
+        let mut closed = false;
+        while let Some(ch) = chars.next() {
+            if ch == '\\' {
+                if let Some(esc) = chars.next() {
+                    match esc {
+                        '"' => value.push('"'),
+                        '\\' => value.push('\\'),
+                        '/' => value.push('/'),
+                        'n' => value.push('\n'),
+                        'r' => {}
+                        't' => value.push('\t'),
+                        other => value.push(other),
+                    }
+                }
+            } else if ch == '"' {
+                closed = true;
+                break;
+            } else {
+                value.push(ch);
+            }
+        }
+        if closed {
+            results.push(value);
+        }
+    }
+    results
+}
+
+fn extract_json_string_after_key(json: &str, key: &str) -> Option<String> {
+    extract_all_json_strings_after_key(json, key).into_iter().next()
+}
+
+fn default_release_asset_url(tag_name: &str) -> String {
+    let asset_name = if cfg!(target_os = "macos") {
+        "MickeyRAR-macOS.dmg"
+    } else {
+        "MickeyRAR-Setup.exe"
+    };
+    format!("https://github.com/{GITHUB_REPO}/releases/download/{tag_name}/{asset_name}")
+}
+
+fn parse_github_release_json(json_str: &str, current_version: &str) -> Option<UpdateInfo> {
+    if json_str.contains("\"message\":\"Not Found\"") || json_str.contains("\"message\": \"Not Found\"") {
+        return None;
+    }
+    let tag_name = extract_json_string_after_key(json_str, "tag_name")?;
+    if !is_version_newer(&tag_name, current_version) {
+        return None;
+    }
+
+    let target_ext = if cfg!(target_os = "macos") { ".dmg" } else { "setup.exe" };
+    let dl_url = extract_all_json_strings_after_key(json_str, "browser_download_url")
+        .into_iter()
+        .find(|u| u.to_lowercase().ends_with(target_ext))
+        .or_else(|| Some(default_release_asset_url(&tag_name)));
+
+    let raw_body = extract_json_string_after_key(json_str, "body").unwrap_or_default();
+    let notes_summary: String = raw_body
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .take(4)
+        .map(|l| l.trim_start_matches("- ").replace("**", "").replace('`', ""))
+        .collect::<Vec<_>>()
+        .join("\n• ");
+
+    Some(UpdateInfo {
+        version: tag_name,
+        download_url: dl_url,
+        notes_summary: if notes_summary.is_empty() {
+            String::new()
+        } else {
+            format!("• {notes_summary}")
+        },
+    })
+}
+
+fn check_for_updates_via_redirect(current_version: &str) -> Result<Option<UpdateInfo>, String> {
+    let latest_page = format!("https://github.com/{GITHUB_REPO}/releases/latest");
+    let curl_bin = if cfg!(windows) { "curl.exe" } else { "curl" };
+    let null_sink = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let mut cmd = std::process::Command::new(curl_bin);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.args([
+        "-s",
+        "-L",
+        "--max-time",
+        "12",
+        "-o",
+        null_sink,
+        "-w",
+        "%{url_effective}",
+        &latest_page,
+    ]);
+    let output = cmd.output().map_err(|e| format!("Network check failed: {e}"))?;
+    if !output.status.success() {
+        return Err("Could not reach GitHub Releases".into());
+    }
+    let effective_url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if let Some((_, tag)) = effective_url.rsplit_once("/releases/tag/") {
+        let tag_name = tag.trim_matches('/').to_string();
+        if !tag_name.is_empty() && is_version_newer(&tag_name, current_version) {
+            return Ok(Some(UpdateInfo {
+                download_url: Some(default_release_asset_url(&tag_name)),
+                version: tag_name,
+                notes_summary: String::new(),
+            }));
+        }
+    }
+    Ok(None)
 }
 
 fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
@@ -2421,54 +2576,27 @@ fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
     let mut cmd = std::process::Command::new(curl_bin);
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    cmd.args(["-s", "-H", "User-Agent: MickeyRAR-App", &url]);
-    let output = cmd.output().map_err(|e| format!("Network check failed: {e}"))?;
-    if !output.status.success() {
-        return Err("Could not reach GitHub API".into());
-    }
-    let json_str = String::from_utf8_lossy(&output.stdout);
-    if json_str.contains("\"message\": \"Not Found\"") {
-        return Ok(None);
-    }
-
-    let tag = json_str.lines()
-        .find(|l| l.contains("\"tag_name\":"))
-        .and_then(|l| {
-            let parts: Vec<&str> = l.split(':').collect();
-            if parts.len() >= 2 {
-                Some(parts[1].trim().trim_matches(|c| c == '"' || c == ',' || c == ' ').to_string())
-            } else {
-                None
-            }
-        });
-
-    let Some(tag_name) = tag else {
-        return Ok(None);
-    };
-
-    let remote_ver = tag_name.trim_start_matches('v');
-    if is_version_newer(remote_ver, CURRENT_VERSION) {
-        let mut dl_url = None;
-        let target_asset_ext = if cfg!(target_os = "macos") { ".dmg" } else { "Setup.exe" };
-        for line in json_str.lines() {
-            if line.contains("browser_download_url") && line.contains(target_asset_ext) {
-                let parts: Vec<&str> = line.split("http").collect();
-                if parts.len() >= 2 {
-                    let full = format!("http{}", parts[1].trim_matches(|c| c == '"' || c == ','));
-                    dl_url = Some(full);
-                    break;
-                }
+    cmd.args([
+        "-s",
+        "-L",
+        "--max-time",
+        "12",
+        "-H",
+        "Accept: application/vnd.github+json",
+        "-H",
+        "User-Agent: MickeyRAR-Updater",
+        &url,
+    ]);
+    if let Ok(output) = cmd.output() {
+        if output.status.success() {
+            let json_str = String::from_utf8_lossy(&output.stdout);
+            if json_str.contains("\"tag_name\"") {
+                return Ok(parse_github_release_json(&json_str, CURRENT_VERSION));
             }
         }
-        if dl_url.is_none() {
-            dl_url = Some(format!("https://github.com/{GITHUB_REPO}/releases/latest"));
-        }
-        return Ok(Some(UpdateInfo {
-            version: tag_name,
-            download_url: dl_url,
-        }));
     }
-    Ok(None)
+    // Fallback to HTTP 302 redirect check (immune to GitHub API 60/hr IP rate limits)
+    check_for_updates_via_redirect(CURRENT_VERSION)
 }
 
 fn run_in_app_extraction(
@@ -4598,45 +4726,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             match res {
                                 Ok(Some(update)) => {
                                     let msg = if arabic {
-                                        format!("يوجد تحديث جديد متوفر ({})! جاري تنزيل التحديث...", update.version)
+                                        format!("تحديث جديد متوفر ({})!", update.version)
                                     } else {
-                                        format!("New update available ({})! Downloading installer...", update.version)
+                                        format!("New update available ({})!", update.version)
                                     };
                                     ui.set_status(msg.into());
-
-                                    if let Some(dl_url) = update.download_url {
-                                        thread::spawn(move || {
-                                            let is_mac = cfg!(target_os = "macos");
-                                            let temp_installer = if is_mac {
-                                                std::env::temp_dir().join("MickeyRAR-Update.dmg")
-                                            } else {
-                                                std::env::temp_dir().join("MickeyRAR-Setup-Update.exe")
-                                            };
-                                            let curl_bin = if cfg!(windows) { "curl.exe" } else { "curl" };
-                                            let mut curl = std::process::Command::new(curl_bin);
-                                            #[cfg(windows)]
-                                            curl.creation_flags(CREATE_NO_WINDOW);
-                                            curl.args(["-L", "-o", &temp_installer.to_string_lossy(), &dl_url]);
-                                            if let Ok(st) = curl.status() {
-                                                if st.success() && temp_installer.exists() {
-                                                    #[cfg(windows)]
-                                                    {
-                                                        let _ = std::process::Command::new("cmd")
-                                                            .args(["/c", "start", "", &temp_installer.to_string_lossy()])
-                                                            .spawn();
-                                                        std::process::exit(0);
-                                                    }
-                                                    #[cfg(target_os = "macos")]
-                                                    {
-                                                        let _ = std::process::Command::new("open")
-                                                            .arg(&temp_installer)
-                                                            .spawn();
-                                                        std::process::exit(0);
-                                                    }
-                                                }
-                                            }
-                                        });
-                                    }
+                                    ui.set_update_dialog_title(if arabic {
+                                        format!("يتوفر تحديث جديد: Mickey RAR {}", update.version).into()
+                                    } else {
+                                        format!("Update Available: Mickey RAR {}", update.version).into()
+                                    });
+                                    let body = if arabic {
+                                        if update.notes_summary.is_empty() {
+                                            format!(
+                                                "الإصدار الحالي لديك: v{}\nالإصدار الجديد المتاح: {}\n\nاضغط «تحديث وتثبيت الآن» لتنزيل التحديث وتثبيته تلقائياً.",
+                                                CURRENT_VERSION, update.version
+                                            )
+                                        } else {
+                                            format!(
+                                                "الإصدار الحالي لديك: v{}   ←   الإصدار الجديد: {}\n\n{}\n\nاضغط «تحديث وتثبيت الآن» لتنزيل المثبت وتحديث البرنامج تلقائياً.",
+                                                CURRENT_VERSION, update.version, update.notes_summary
+                                            )
+                                        }
+                                    } else if update.notes_summary.is_empty() {
+                                        format!(
+                                            "Installed version: v{}\nAvailable version: {}\n\nClick 'Update & Install Now' to download and install automatically.",
+                                            CURRENT_VERSION, update.version
+                                        )
+                                    } else {
+                                        format!(
+                                            "Installed: v{}   →   New: {}\n\n{}\n\nClick 'Update & Install Now' to download and install automatically.",
+                                            CURRENT_VERSION, update.version, update.notes_summary
+                                        )
+                                    };
+                                    ui.set_update_dialog_body(body.into());
+                                    ui.set_update_download_url(update.download_url.unwrap_or_default().into());
+                                    ui.set_update_has_new(true);
+                                    ui.set_update_downloading(false);
+                                    ui.set_show_update_dialog(true);
                                 }
                                 Ok(None) => {
                                     let msg = if arabic {
@@ -4644,16 +4771,134 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     } else {
                                         format!("Mickey RAR is up to date (v{})", CURRENT_VERSION)
                                     };
-                                    ui.set_status(msg.into());
+                                    ui.set_status(msg.clone().into());
+                                    ui.set_update_dialog_title(if arabic {
+                                        "لا توجد تحديثات جديدة".into()
+                                    } else {
+                                        "Up to Date".into()
+                                    });
+                                    ui.set_update_dialog_body(msg.into());
+                                    ui.set_update_has_new(false);
+                                    ui.set_update_downloading(false);
+                                    ui.set_show_update_dialog(true);
                                 }
                                 Err(e) => {
-                                    ui.set_status(format!("Update check error: {e}").into());
+                                    let err_msg = if arabic {
+                                        format!("تعذّر التحقق من التحديثات: {e}")
+                                    } else {
+                                        format!("Update check error: {e}")
+                                    };
+                                    ui.set_status(err_msg.clone().into());
+                                    ui.set_update_dialog_title(if arabic {
+                                        "خطأ في الاتصال".into()
+                                    } else {
+                                        "Connection Error".into()
+                                    });
+                                    ui.set_update_dialog_body(err_msg.into());
+                                    ui.set_update_has_new(false);
+                                    ui.set_update_downloading(false);
+                                    ui.set_show_update_dialog(true);
                                 }
                             }
                         }
                     });
                 });
             }
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        ui.on_install_update(move || {
+            let Some(ui) = weak.upgrade() else { return; };
+            let dl_url = ui.get_update_download_url().to_string();
+            if dl_url.trim().is_empty() {
+                return;
+            }
+            let arabic = ui.get_arabic_mode();
+            ui.set_update_downloading(true);
+            let downloading_msg = if arabic {
+                "جاري تنزيل ملف التحديث من GitHub... يرجى الانتظار لحظات."
+            } else {
+                "Downloading update installer from GitHub... Please wait."
+            };
+            ui.set_status(downloading_msg.into());
+            ui.set_update_dialog_body(downloading_msg.into());
+
+            let weak_bg = weak.clone();
+            thread::spawn(move || {
+                let is_mac = cfg!(target_os = "macos");
+                let temp_installer = if is_mac {
+                    std::env::temp_dir().join("MickeyRAR-Update.dmg")
+                } else {
+                    std::env::temp_dir().join("MickeyRAR-Setup-Update.exe")
+                };
+                let _ = fs::remove_file(&temp_installer);
+                let curl_bin = if cfg!(windows) { "curl.exe" } else { "curl" };
+                let mut curl = std::process::Command::new(curl_bin);
+                #[cfg(windows)]
+                curl.creation_flags(CREATE_NO_WINDOW);
+                curl.args([
+                    "-L",
+                    "--fail",
+                    "--max-time",
+                    "300",
+                    "-o",
+                    &temp_installer.to_string_lossy(),
+                    &dl_url,
+                ]);
+                let ok_download = curl
+                    .status()
+                    .map(|st| st.success())
+                    .unwrap_or(false)
+                    && fs::metadata(&temp_installer)
+                        .map(|m| m.len() > 1_000_000)
+                        .unwrap_or(false);
+
+                #[cfg(windows)]
+                let valid_binary = ok_download
+                    && fs::read(&temp_installer)
+                        .map(|b| b.starts_with(b"MZ"))
+                        .unwrap_or(false);
+                #[cfg(not(windows))]
+                let valid_binary = ok_download;
+
+                if valid_binary {
+                    #[cfg(windows)]
+                    {
+                        if std::process::Command::new(&temp_installer).spawn().is_err() {
+                            let escaped = temp_installer.display().to_string().replace('\'', "''");
+                            let mut ps = std::process::Command::new("powershell.exe");
+                            ps.creation_flags(CREATE_NO_WINDOW);
+                            let _ = ps
+                                .args(["-NoProfile", "-Command", &format!("Start-Process -FilePath '{escaped}'")])
+                                .spawn();
+                        }
+                        std::process::exit(0);
+                    }
+                    #[cfg(target_os = "macos")]
+                    {
+                        let _ = std::process::Command::new("open")
+                            .arg(&temp_installer)
+                            .spawn();
+                        std::process::exit(0);
+                    }
+                } else {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = weak_bg.upgrade() {
+                            let arabic = ui.get_arabic_mode();
+                            ui.set_update_downloading(false);
+                            let fail_msg = if arabic {
+                                "تعذّر تنزيل ملف التحديث تلقائياً. يرجى المحاولة مرة أخرى أو التحقق من اتصال الإنترنت."
+                            } else {
+                                "Could not download the update installer automatically. Please check your connection and try again."
+                            };
+                            ui.set_status(fail_msg.into());
+                            ui.set_update_dialog_body(fail_msg.into());
+                        }
+                    });
+                }
+            });
         });
     }
 
@@ -4685,8 +4930,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        cleanup_new_zero_byte_files, parse_formatted_bytes, parse_modified_sort_key,
-        snapshot_zero_byte_files, sort_file_entries, supported_archive, FileEntry,
+        cleanup_new_zero_byte_files, is_version_newer, parse_formatted_bytes,
+        parse_github_release_json, parse_modified_sort_key, snapshot_zero_byte_files,
+        sort_file_entries, supported_archive, FileEntry,
     };
     use std::path::Path;
 
@@ -4746,5 +4992,30 @@ mod tests {
         assert!(user_empty.exists());
         assert!(!partial_extract.exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parses_minified_single_line_github_release_json() {
+        let minified = r####"{"url":"https://api.github.com/repos/Michael-Maged1/MickeyRAR/releases/456613429","html_url":"https://github.com/Michael-Maged1/MickeyRAR/releases/tag/v0.6.1","tag_name":"v0.6.1","name":"Mickey RAR v0.6.1","assets":[{"name":"MickeyRAR-macOS.dmg","browser_download_url":"https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.6.1/MickeyRAR-macOS.dmg"},{"name":"MickeyRAR-Setup.exe","browser_download_url":"https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.6.1/MickeyRAR-Setup.exe"}],"body":"### What's New\n- **Fixed Updater:** Handles minified JSON properly.\n- **Interactive Dialog:** Shows update details."}"####;
+
+        let update = parse_github_release_json(minified, "0.5.1").expect("should detect v0.6.1 update");
+        assert_eq!(update.version, "v0.6.1");
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                update.download_url.as_deref(),
+                Some("https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.6.1/MickeyRAR-macOS.dmg")
+            );
+        } else {
+            assert_eq!(
+                update.download_url.as_deref(),
+                Some("https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.6.1/MickeyRAR-Setup.exe")
+            );
+        }
+        assert!(update.notes_summary.contains("Fixed Updater"));
+        assert!(parse_github_release_json(minified, "0.6.1").is_none());
+        assert!(is_version_newer("v0.6.1", "0.5.1"));
+        assert!(is_version_newer("0.6.0", "0.5.9"));
+        assert!(!is_version_newer("v0.6.1", "0.6.1"));
+        assert!(!is_version_newer("https", "0.5.1"));
     }
 }

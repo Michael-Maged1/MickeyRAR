@@ -10,14 +10,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.6.0/MickeyRAR-Setup.exe">
+  <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.6.1/MickeyRAR-Setup.exe">
     <img src="https://img.shields.io/badge/🪟_Windows-Setup.exe-E8573F?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows Installer" height="38" />
   </a>
-  <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.6.0/MickeyRAR-macOS.dmg">
+  <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.6.1/MickeyRAR-macOS.dmg">
     <img src="https://img.shields.io/badge/🍏_macOS-MickeyRAR.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS DMG" height="38" />
   </a>
   <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/latest">
-    <img src="https://img.shields.io/badge/Release-v0.6.0-191919?style=for-the-badge&logo=github&logoColor=white" alt="Latest Release" height="38" />
+    <img src="https://img.shields.io/badge/Release-v0.6.1-191919?style=for-the-badge&logo=github&logoColor=white" alt="Latest Release" height="38" />
   </a>
 </p>
 
@@ -39,20 +39,20 @@
 Choose your operating system to download the standalone installer directly:
 
 <p align="center">
-  <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.6.0/MickeyRAR-Setup.exe">
+  <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.6.1/MickeyRAR-Setup.exe">
     <img src="https://img.shields.io/badge/🪟_Download_for_Windows-MickeyRAR--Setup.exe-E8573F?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows" height="46" />
   </a>
   &nbsp;&nbsp;
-  <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.6.0/MickeyRAR-macOS.dmg">
+  <a href="https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.6.1/MickeyRAR-macOS.dmg">
     <img src="https://img.shields.io/badge/🍏_Download_for_macOS-MickeyRAR--macOS.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" height="46" />
   </a>
 </p>
 
 ### 📥 روابط التحميل المباشرة (Direct Download Links):
 * 🪟 **لويندوز (Windows 10 / 11):**  
-  👉 **[MickeyRAR-Setup.exe (المثبت الجاهز لويندوز)](https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.6.0/MickeyRAR-Setup.exe)**
+  👉 **[MickeyRAR-Setup.exe (المثبت الجاهز لويندوز)](https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.6.1/MickeyRAR-Setup.exe)**
 * 🍏 **للماك (macOS Apple Silicon & Intel):**  
-  👉 **[MickeyRAR-macOS.dmg (ملف التثبيت للماك)](https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.6.0/MickeyRAR-macOS.dmg)**
+  👉 **[MickeyRAR-macOS.dmg (ملف التثبيت للماك)](https://github.com/Michael-Maged1/MickeyRAR/releases/download/v0.6.1/MickeyRAR-macOS.dmg)**
 * 📦 **صفحة الإصدارات الكاملة على GitHub:**  
   [https://github.com/Michael-Maged1/MickeyRAR/releases/latest](https://github.com/Michael-Maged1/MickeyRAR/releases/latest)
 

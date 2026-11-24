@@ -254,6 +254,12 @@ export component MainWindow inherits Window {
     in-out property <bool> show-info-dialog: false;
     in-out property <string> info-dialog-title: "";
     in-out property <string> info-dialog-body: "";
+    in-out property <bool> show-update-dialog: false;
+    in-out property <string> update-dialog-title: "";
+    in-out property <string> update-dialog-body: "";
+    in-out property <bool> update-has-new: false;
+    in-out property <bool> update-downloading: false;
+    in-out property <string> update-download-url: "";
     in-out property <bool> show-context-menu: false;
     in-out property <length> context-menu-x: 100px;
     in-out property <length> context-menu-y: 100px;
@@ -307,12 +313,14 @@ export component MainWindow inherits Window {
     callback nav-favorite(string);
     callback show-about();
     callback check-updates();
+    callback install-update();
 
     key-handler := FocusScope {
         key-pressed(event) => {
             if (event.text == Key.Escape) {
                 root.active-menu = 0;
                 root.show-context-menu = false;
+                if (root.show-update-dialog && !root.update-downloading) { root.show-update-dialog = false; return accept; }
                 if (root.show-rename) { root.show-rename = false; return accept; }
                 if (root.show-info-dialog) { root.show-info-dialog = false; return accept; }
                 if (root.show-wizard) { root.show-wizard = false; return accept; }
@@ -1445,6 +1453,68 @@ export component MainWindow inherits Window {
                     Button {
                         text: root.arabic-mode ? "حسناً" : "OK";
                         clicked => { root.show-info-dialog = false; }
+                    }
+                }
+            }
+        }
+    }
+
+    // 11. Software Update Modal Overlay
+    if root.show-update-dialog : Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        background: #00000088;
+        TouchArea {
+            clicked => {
+                if (!root.update-downloading) {
+                    root.show-update-dialog = false;
+                }
+            }
+        }
+
+        Rectangle {
+            x: (parent.width - 450px) / 2;
+            y: (parent.height - 250px) / 2;
+            width: 450px;
+            height: 250px;
+            border-radius: 6px;
+            background: root.dark-mode ? #202020 : #ffffff;
+            border-width: 1px;
+            border-color: #e8573f;
+            TouchArea {}
+
+            VerticalBox {
+                padding: 16px;
+                spacing: 10px;
+                Text {
+                    text: root.update-dialog-title;
+                    font-size: 15px;
+                    font-weight: 700;
+                    color: #e8573f;
+                }
+                Rectangle { height: 1px; background: root.dark-mode ? #363636 : #dddddd; }
+                Text {
+                    text: root.update-dialog-body;
+                    font-size: 12px;
+                    color: root.dark-mode ? #e0e0e0 : #222222;
+                    wrap: word-wrap;
+                }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalBox {
+                    alignment: end;
+                    spacing: 8px;
+                    Button {
+                        text: root.update-has-new
+                            ? (root.arabic-mode ? "لاحقاً" : "Later")
+                            : (root.arabic-mode ? "حسناً" : "OK");
+                        enabled: !root.update-downloading;
+                        clicked => { root.show-update-dialog = false; }
+                    }
+                    if root.update-has-new : Button {
+                        text: root.update-downloading
+                            ? (root.arabic-mode ? "جاري التنزيل..." : "Downloading...")
+                            : (root.arabic-mode ? "تحديث وتثبيت الآن" : "Update & Install Now");
+                        enabled: !root.update-downloading;
+                        clicked => { root.install-update(); }
                     }
                 }
             }
