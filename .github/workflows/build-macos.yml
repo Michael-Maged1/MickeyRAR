@@ -10,6 +10,7 @@ on:
       - 'ui/**'
       - 'assets/**'
       - 'macos/**'
+      - 'installer/**'
       - 'Cargo.*'
       - '.github/workflows/build-macos.yml'
 
@@ -60,18 +61,34 @@ jobs:
           path: MickeyRAR-macOS.dmg
           if-no-files-found: error
 
-      - name: Upload DMG to GitHub Release (v0.5.0)
+      - name: Publish Windows Installer & macOS DMG to GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Upload or replace MickeyRAR-macOS.dmg in release v0.5.0
-          if gh release view v0.5.0 >/dev/null 2>&1; then
-            echo "Uploading MickeyRAR-macOS.dmg to release v0.5.0..."
-            gh release upload v0.5.0 MickeyRAR-macOS.dmg --clobber
-          else
-            echo "Release v0.5.0 not found, creating new release..."
-            gh release create v0.5.0 MickeyRAR-macOS.dmg \
-              --title "Mickey RAR v0.5.0 - Official Release" \
-              --notes "Standalone Windows installer and macOS DMG."
+          VERSION="v$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          echo "Publishing release $VERSION..."
+          ASSETS=("MickeyRAR-macOS.dmg")
+          if [ -f "installer/MickeyRAR-Setup.exe" ]; then
+            ASSETS+=("installer/MickeyRAR-Setup.exe")
           fi
-          echo "macOS DMG published successfully!"
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Uploading assets to existing release $VERSION..."
+            gh release upload "$VERSION" "${ASSETS[@]}" --clobber
+          else
+            echo "Creating official GitHub Release $VERSION..."
+            cat <<'EOF' > release_notes.md
+          ### What's New / أبرز التحسينات الجديدة
+          - **Fast Password Verification:** Instant password validation via header/smallest-file testing without decompressing multi-GB archives twice, plus full browsing of encrypted-header archives (`.7z -mhe=on`, `.rar -hp`).
+          - **True Pause & Resume:** Real OS-level process suspension/resuming (`NtSuspendProcess` / `NtResumeProcess`) with accurate elapsed & remaining timers.
+          - **In-App Archive Creation, AES-256 Encryption & SFX (.exe):** Full bilingual dialog supporting `ZIP`, `7Z`, and self-extracting `SFX (.exe)` archives with password protection and filename encryption.
+          - **Multi-Select & Keyboard Shortcuts:** Single-click selection, double-click open, `Ctrl+Click`, `Shift+Click`, `Ctrl+A`, `Ctrl+O`, `Ctrl+D`, `Ctrl+F`, `Ctrl+C`, `F2`, `F5`, `Delete`, and `Backspace`.
+          - **Live Find, Wizard, Info & Editable Address Bar:** Recursive search bar, 4-action quick Wizard, detailed archive statistics modal, editable path input, and instant drive switcher.
+          - **Sortable Columns, Theme Persistence & Right-Click Context Menu:** Clickable column sorting (`Names`, `Size`, `Packed`, `Type`, `Modified`, `CRC32`), saved Dark/Light theme preference, in-app context menu, and `F2` rename on disk & inside archives.
+          - **Safe Cancellation & Zip-Slip Protection:** Preserves pre-existing empty files on cancel and blocks unsafe path traversal entries.
+          EOF
+            gh release create "$VERSION" "${ASSETS[@]}" \
+              --title "Mickey RAR $VERSION - Major Feature & Performance Update" \
+              --notes-file release_notes.md
+            rm -f release_notes.md
+          fi
+          echo "Release $VERSION published successfully!"

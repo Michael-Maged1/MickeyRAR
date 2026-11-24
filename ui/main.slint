@@ -201,9 +201,17 @@ component HeaderCell inherits Rectangle {
     in property <string> caption;
     in property <bool> dark-mode: true;
     in property <TextHorizontalAlignment> text-align: left;
+    callback clicked();
 
     height: 25px;
-    background: transparent;
+    background: h-touch.pressed
+        ? (root.dark-mode ? #303030 : #d5d9e0)
+        : (h-touch.has-hover ? (root.dark-mode ? #292929 : #dfe3ea) : transparent);
+
+    h-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
 
     Text {
         text: root.caption;
@@ -211,7 +219,9 @@ component HeaderCell inherits Rectangle {
         y: 0px;
         width: parent.width - 16px;
         height: parent.height;
-        color: root.dark-mode ? #9a9a9a : #555555;
+        color: h-touch.has-hover
+            ? (root.dark-mode ? #e0e0e0 : #111111)
+            : (root.dark-mode ? #9a9a9a : #555555);
         font-size: 11.5px;
         font-weight: 500;
         vertical-alignment: center;
@@ -226,6 +236,7 @@ export component MainWindow inherits Window {
     height: 660px;
     icon: @image-url("../assets/icon-window.png");
     background: root.dark-mode ? #191919 : #f4f5f7;
+    forward-focus: key-handler;
 
     in-out property <string> location: "";
     in-out property <string> status: "Selected 0 bytes in 0 files";
@@ -234,6 +245,21 @@ export component MainWindow inherits Window {
     in-out property <[FileEntry]> entries: [];
     in-out property <int> selected-index: -1;
     in-out property <bool> show-settings: false;
+    in-out property <bool> show-find: false;
+    in-out property <string> find-query: "";
+    in-out property <bool> show-wizard: false;
+    in-out property <bool> show-rename: false;
+    in-out property <string> rename-old-name: "";
+    in-out property <string> rename-new-name: "";
+    in-out property <bool> show-info-dialog: false;
+    in-out property <string> info-dialog-title: "";
+    in-out property <string> info-dialog-body: "";
+    in-out property <bool> show-context-menu: false;
+    in-out property <length> context-menu-x: 100px;
+    in-out property <length> context-menu-y: 100px;
+    in-out property <[string]> available-drives: ["C:\\"];
+    in-out property <int> sort-column: 0;
+    in-out property <bool> sort-ascending: true;
     in-out property <bool> arabic-mode: false;
     in-out property <bool> solid-mode: true;
     in-out property <string> thread-count: "auto";
@@ -243,21 +269,32 @@ export component MainWindow inherits Window {
     callback toggle-language();
     callback toggle-theme();
     callback choose-folder();
+    callback navigate-path(string);
     callback open-archive();
     callback create-archive();
+    callback create-sfx-archive();
+    callback create-encrypted-archive();
     callback extract-archive();
     callback test-archive();
     callback refresh();
     callback nav-up();
     callback select-entry(int);
+    callback select-entry-adv(int, bool, bool);
     callback open-entry(string);
+    callback open-selected();
     callback start-drag(int);
+    callback sort-by(int);
+    callback run-find(string);
+    callback clear-find();
+    callback start-rename();
+    callback confirm-rename(string, string);
+    callback copy-selected-path();
     callback save-compression-settings(string, bool);
     callback set-default-app();
     callback open-url(string);
     callback toolbar-info(string);
 
-    // New Menu actions:
+    // Menu actions:
     callback select-all();
     callback clear-selection();
     callback invert-selection();
@@ -270,6 +307,58 @@ export component MainWindow inherits Window {
     callback nav-favorite(string);
     callback show-about();
     callback check-updates();
+
+    key-handler := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.active-menu = 0;
+                root.show-context-menu = false;
+                if (root.show-rename) { root.show-rename = false; return accept; }
+                if (root.show-info-dialog) { root.show-info-dialog = false; return accept; }
+                if (root.show-wizard) { root.show-wizard = false; return accept; }
+                if (root.show-find) { root.show-find = false; root.find-query = ""; root.clear-find(); return accept; }
+                if (root.show-settings) { root.show-settings = false; return accept; }
+                root.clear-selection();
+                return accept;
+            }
+            if (event.text == Key.F5) {
+                root.refresh();
+                return accept;
+            }
+            if (event.text == Key.F2) {
+                root.start-rename();
+                return accept;
+            }
+            if (event.text == Key.Delete) {
+                root.delete-selected();
+                return accept;
+            }
+            if (event.text == Key.Return) {
+                root.open-selected();
+                return accept;
+            }
+            if (event.text == Key.Backspace) {
+                root.nav-up();
+                return accept;
+            }
+            if (event.modifiers.control) {
+                if (event.text == "a" || event.text == "A") { root.select-all(); return accept; }
+                if (event.text == "o" || event.text == "O") { root.open-archive(); return accept; }
+                if (event.text == "d" || event.text == "D") { root.choose-folder(); return accept; }
+                if (event.text == "f" || event.text == "F") { root.show-find = !root.show-find; return accept; }
+                if (event.text == "c" || event.text == "C") { root.copy-selected-path(); return accept; }
+            }
+            if (event.modifiers.alt) {
+                if (event.text == "a" || event.text == "A") { root.create-archive(); return accept; }
+                if (event.text == "e" || event.text == "E") { root.extract-archive(); return accept; }
+                if (event.text == "t" || event.text == "T") { root.test-archive(); return accept; }
+                if (event.text == "v" || event.text == "V") { root.view-selected(); return accept; }
+                if (event.text == "i" || event.text == "I") { root.show-archive-info(); return accept; }
+                if (event.text == "f" || event.text == "F") { root.show-find = true; return accept; }
+                if (event.text == "x" || event.text == "X") { root.exit-app(); return accept; }
+            }
+            return reject;
+        }
 
     VerticalBox {
         spacing: 0px;
@@ -379,35 +468,43 @@ export component MainWindow inherits Window {
                     icon: @image-url("../assets/icons/view.svg");
                     icon-light: @image-url("../assets/icons-light/view.svg");
                     caption: root.arabic-mode ? "عرض" : "View";
-                    activated => { root.active-menu = 0; root.open-archive(); }
+                    activated => { root.active-menu = 0; root.show-context-menu = false; root.view-selected(); }
                 }
                 ToolbarButton {
                     dark-mode: root.dark-mode;
                     icon: @image-url("../assets/icons/delete.svg");
                     icon-light: @image-url("../assets/icons-light/delete.svg");
                     caption: root.arabic-mode ? "حذف" : "Delete";
-                    activated => { root.active-menu = 0; root.delete-selected(); }
+                    activated => { root.active-menu = 0; root.show-context-menu = false; root.delete-selected(); }
                 }
                 ToolbarButton {
                     dark-mode: root.dark-mode;
                     icon: @image-url("../assets/icons/find.svg");
                     icon-light: @image-url("../assets/icons-light/find.svg");
                     caption: root.arabic-mode ? "بحث" : "Find";
-                    activated => { root.active-menu = 0; root.toolbar-info("Find"); }
+                    activated => {
+                        root.active-menu = 0;
+                        root.show-context-menu = false;
+                        root.show-find = !root.show-find;
+                        if (!root.show-find) {
+                            root.find-query = "";
+                            root.clear-find();
+                        }
+                    }
                 }
                 ToolbarButton {
                     dark-mode: root.dark-mode;
                     icon: @image-url("../assets/icons/wizard.svg");
                     icon-light: @image-url("../assets/icons-light/wizard.svg");
                     caption: root.arabic-mode ? "معالج" : "Wizard";
-                    activated => { root.active-menu = 0; root.toolbar-info("Wizard"); }
+                    activated => { root.active-menu = 0; root.show-context-menu = false; root.show-wizard = !root.show-wizard; }
                 }
                 ToolbarButton {
                     dark-mode: root.dark-mode;
                     icon: @image-url("../assets/icons/info.svg");
                     icon-light: @image-url("../assets/icons-light/info.svg");
                     caption: root.arabic-mode ? "معلومات" : "Info";
-                    activated => { root.active-menu = 0; root.show-archive-info(); }
+                    activated => { root.active-menu = 0; root.show-context-menu = false; root.show-archive-info(); }
                 }
 
                 // Vertical Separator between Info and VirusScan (Exactly as in reference image)
@@ -426,28 +523,28 @@ export component MainWindow inherits Window {
                     icon: @image-url("../assets/icons/virus.svg");
                     icon-light: @image-url("../assets/icons-light/virus.svg");
                     caption: root.arabic-mode ? "فحص" : "VirusScan";
-                    activated => { root.active-menu = 0; root.scan-viruses(); }
+                    activated => { root.active-menu = 0; root.show-context-menu = false; root.scan-viruses(); }
                 }
                 ToolbarButton {
                     dark-mode: root.dark-mode;
                     icon: @image-url("../assets/icons/comment.svg");
                     icon-light: @image-url("../assets/icons-light/comment.svg");
                     caption: root.arabic-mode ? "تعليق" : "Comment";
-                    activated => { root.active-menu = 0; root.toolbar-info("Comment"); }
+                    activated => { root.active-menu = 0; root.show-context-menu = false; root.show-archive-info(); }
                 }
                 ToolbarButton {
                     dark-mode: root.dark-mode;
                     icon: @image-url("../assets/icons/protect.svg");
                     icon-light: @image-url("../assets/icons-light/protect.svg");
                     caption: root.arabic-mode ? "حماية" : "Protect";
-                    activated => { root.active-menu = 0; root.toolbar-info("Protect"); }
+                    activated => { root.active-menu = 0; root.show-context-menu = false; root.create-encrypted-archive(); }
                 }
                 ToolbarButton {
                     dark-mode: root.dark-mode;
                     icon: @image-url("../assets/icons/sfx.svg");
                     icon-light: @image-url("../assets/icons-light/sfx.svg");
                     caption: root.arabic-mode ? "ذاتي SFX" : "SFX";
-                    activated => { root.active-menu = 0; root.toolbar-info("SFX"); }
+                    activated => { root.active-menu = 0; root.show-context-menu = false; root.create-sfx-archive(); }
                 }
 
                 Rectangle { horizontal-stretch: 1; }
@@ -507,6 +604,109 @@ export component MainWindow inherits Window {
             }
         }
 
+        // ---- Find / Search Bar Drawer ----
+        if root.show-find : Rectangle {
+            height: 42px;
+            background: root.dark-mode ? #222222 : #f5f6f8;
+            border-width: 1px;
+            border-color: #e8573f;
+
+            HorizontalBox {
+                padding-left: 10px;
+                padding-right: 10px;
+                padding-top: 5px;
+                padding-bottom: 5px;
+                spacing: 8px;
+
+                Text {
+                    text: root.arabic-mode ? "بحث سريع:" : "Quick Find:";
+                    color: root.dark-mode ? #e8573f : #d44a33;
+                    font-weight: 700;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    height: 28px;
+                    border-radius: 4px;
+                    background: root.dark-mode ? #141414 : #ffffff;
+                    border-width: 1px;
+                    border-color: root.dark-mode ? #383838 : #cccccc;
+
+                    find-input := TextInput {
+                        x: 8px;
+                        y: 0px;
+                        width: parent.width - 16px;
+                        height: parent.height;
+                        text <=> root.find-query;
+                        color: root.dark-mode ? #f0f0f0 : #1e1e1e;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                        edited => { root.run-find(self.text); }
+                        accepted => { root.run-find(self.text); }
+                    }
+                }
+
+                Button {
+                    text: root.arabic-mode ? "بحث" : "Search";
+                    clicked => { root.run-find(root.find-query); }
+                }
+                Button {
+                    text: root.arabic-mode ? "مسح وإغلاق" : "Clear & Close";
+                    clicked => {
+                        root.find-query = "";
+                        root.show-find = false;
+                        root.clear-find();
+                    }
+                }
+            }
+        }
+
+        // ---- Wizard Quick Action Bar ----
+        if root.show-wizard : Rectangle {
+            height: 54px;
+            background: root.dark-mode ? #222222 : #f5f6f8;
+            border-width: 1px;
+            border-color: #e8573f;
+
+            HorizontalBox {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 10px;
+
+                Text {
+                    text: root.arabic-mode ? "معالج Mickey RAR السريع:" : "Quick Archive Wizard:";
+                    color: root.dark-mode ? #e8573f : #d44a33;
+                    font-weight: 700;
+                    font-size: 12.5px;
+                    vertical-alignment: center;
+                }
+
+                Button {
+                    text: root.arabic-mode ? "1. فك ضغط أرشيف موجود..." : "1. Unpack an Archive...";
+                    clicked => { root.show-wizard = false; root.extract-archive(); }
+                }
+                Button {
+                    text: root.arabic-mode ? "2. إنشاء أرشيف مضغوط جديد..." : "2. Create New Archive...";
+                    clicked => { root.show-wizard = false; root.create-archive(); }
+                }
+                Button {
+                    text: root.arabic-mode ? "3. أرشيف مشفر بكلمة مرور..." : "3. Password-Protected Archive...";
+                    clicked => { root.show-wizard = false; root.create-encrypted-archive(); }
+                }
+                Button {
+                    text: root.arabic-mode ? "4. أرشيف ذاتي التشغيل (.exe)" : "4. Self-Extracting SFX (.exe)";
+                    clicked => { root.show-wizard = false; root.create-sfx-archive(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: "✕";
+                    clicked => { root.show-wizard = false; }
+                }
+            }
+        }
+
         // ---- Address Bar / Breadcrumb (Neutral Dark) ----
         Rectangle {
             height: 36px;
@@ -524,21 +724,19 @@ export component MainWindow inherits Window {
                     dark-mode: root.dark-mode;
                     icon: @image-url("../assets/icons/up.svg");
                     icon-light: @image-url("../assets/icons-light/up.svg");
-                    activated => { root.active-menu = 0; root.nav-up(); }
+                    activated => { root.active-menu = 0; root.show-context-menu = false; root.nav-up(); }
                 }
 
-                // Path Input Field
+                // Editable Path Input Field + Drives Dropdown Trigger
                 Rectangle {
                     horizontal-stretch: 1;
                     height: 27px;
                     border-radius: 4px;
                     background: root.dark-mode ? #141414 : #ffffff;
                     border-width: 1px;
-                    border-color: root.dark-mode ? #2d2d2d : #cfd3da;
-
-                    TouchArea {
-                        clicked => { root.active-menu = 0; root.choose-folder(); }
-                    }
+                    border-color: path-input.has-focus
+                        ? #e8573f
+                        : (root.dark-mode ? #2d2d2d : #cfd3da);
 
                     Image {
                         source: @image-url("../assets/icons/folder.svg");
@@ -549,31 +747,56 @@ export component MainWindow inherits Window {
                         image-fit: contain;
                     }
 
-                    Text {
-                        text: root.location;
+                    path-input := TextInput {
+                        text <=> root.location;
                         x: 28px;
                         y: 0px;
-                        width: parent.width - 50px;
+                        width: parent.width - 56px;
                         height: parent.height;
                         color: root.dark-mode ? #dedede : #222222;
                         font-size: 12px;
                         vertical-alignment: center;
-                        overflow: elide;
+                        single-line: true;
+                        accepted => {
+                            root.active-menu = 0;
+                            root.show-context-menu = false;
+                            root.navigate-path(self.text);
+                            key-handler.focus();
+                        }
                     }
 
-                    Path {
-                        x: parent.width - 16px;
-                        y: (parent.height - 5px) / 2;
-                        width: 9px;
-                        height: 5px;
-                        commands: "M 0 0 L 9 0 L 4.5 5 Z";
-                        fill: root.dark-mode ? #e8573f : #d44a33;
+                    Rectangle {
+                        x: parent.width - 26px;
+                        y: 1px;
+                        width: 25px;
+                        height: parent.height - 2px;
+                        border-radius: 3px;
+                        background: drv-touch.has-hover
+                            ? (root.dark-mode ? #262626 : #ebebeb)
+                            : transparent;
+
+                        drv-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.show-context-menu = false;
+                                root.active-menu = (root.active-menu == 7 ? 0 : 7);
+                            }
+                        }
+
+                        Path {
+                            x: (parent.width - 9px) / 2;
+                            y: (parent.height - 5px) / 2;
+                            width: 9px;
+                            height: 5px;
+                            commands: "M 0 0 L 9 0 L 4.5 5 Z";
+                            fill: root.dark-mode ? #e8573f : #d44a33;
+                        }
                     }
                 }
             }
         }
 
-        // ---- Column Headers (Neutral Dark) ----
+        // ---- Column Headers (Sortable) ----
         Rectangle {
             height: 26px;
             background: root.dark-mode ? #222222 : #e8eaee;
@@ -587,38 +810,44 @@ export component MainWindow inherits Window {
 
                 HeaderCell {
                     dark-mode: root.dark-mode;
-                    caption: root.arabic-mode ? "الاسم ▴" : "Names ▴";
+                    caption: (root.arabic-mode ? "الاسم" : "Names") + (root.sort-column == 0 ? (root.sort-ascending ? " ▴" : " ▾") : "");
                     width: 38%;
+                    clicked => { root.sort-by(0); }
                 }
                 Rectangle { width: 1px; height: 18px; y: 4px; background: root.dark-mode ? #2e2e2e : #d0d3d8; }
                 HeaderCell {
                     dark-mode: root.dark-mode;
-                    caption: root.arabic-mode ? "الحجم" : "Size";
+                    caption: (root.arabic-mode ? "الحجم" : "Size") + (root.sort-column == 1 ? (root.sort-ascending ? " ▴" : " ▾") : "");
                     width: 13%;
+                    clicked => { root.sort-by(1); }
                 }
                 Rectangle { width: 1px; height: 18px; y: 4px; background: root.dark-mode ? #2e2e2e : #d0d3d8; }
                 HeaderCell {
                     dark-mode: root.dark-mode;
-                    caption: root.arabic-mode ? "المضغوط" : "Packed";
+                    caption: (root.arabic-mode ? "المضغوط" : "Packed") + (root.sort-column == 2 ? (root.sort-ascending ? " ▴" : " ▾") : "");
                     width: 13%;
+                    clicked => { root.sort-by(2); }
                 }
                 Rectangle { width: 1px; height: 18px; y: 4px; background: root.dark-mode ? #2e2e2e : #d0d3d8; }
                 HeaderCell {
                     dark-mode: root.dark-mode;
-                    caption: root.arabic-mode ? "النوع" : "Type";
+                    caption: (root.arabic-mode ? "النوع" : "Type") + (root.sort-column == 3 ? (root.sort-ascending ? " ▴" : " ▾") : "");
                     width: 14%;
+                    clicked => { root.sort-by(3); }
                 }
                 Rectangle { width: 1px; height: 18px; y: 4px; background: root.dark-mode ? #2e2e2e : #d0d3d8; }
                 HeaderCell {
                     dark-mode: root.dark-mode;
-                    caption: root.arabic-mode ? "تاريخ التعديل" : "Modified";
+                    caption: (root.arabic-mode ? "تاريخ التعديل" : "Modified") + (root.sort-column == 4 ? (root.sort-ascending ? " ▴" : " ▾") : "");
                     width: 14%;
+                    clicked => { root.sort-by(4); }
                 }
                 Rectangle { width: 1px; height: 18px; y: 4px; background: root.dark-mode ? #2e2e2e : #d0d3d8; }
                 HeaderCell {
                     dark-mode: root.dark-mode;
-                    caption: "CRC32";
+                    caption: "CRC32" + (root.sort-column == 5 ? (root.sort-ascending ? " ▴" : " ▾") : "");
                     horizontal-stretch: 1;
+                    clicked => { root.sort-by(5); }
                 }
             }
         }
@@ -647,12 +876,26 @@ export component MainWindow inherits Window {
                         property <bool> is-dragging-row: false;
                         property <length> press-x;
                         property <length> press-y;
+                        property <bool> last-ctrl: false;
+                        property <bool> last-shift: false;
 
                         pointer-event(event) => {
                             if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
                                 self.press-x = self.mouse-x;
                                 self.press-y = self.mouse-y;
+                                self.last-ctrl = event.modifiers.control;
+                                self.last-shift = event.modifiers.shift;
                                 self.is-dragging-row = false;
+                            }
+                            if (event.kind == PointerEventKind.up && event.button == PointerEventButton.right) {
+                                root.active-menu = 0;
+                                if (!entry.is-selected) {
+                                    root.select-entry-adv(idx, false, false);
+                                }
+                                root.context-menu-x = Math.max(8px, Math.min(self.absolute-position.x + self.mouse-x, root.width - 235px));
+                                root.context-menu-y = Math.max(32px, Math.min(self.absolute-position.y + self.mouse-y, root.height - 210px));
+                                root.show-context-menu = true;
+                                key-handler.focus();
                             }
                             if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
                                 self.is-dragging-row = false;
@@ -672,10 +915,19 @@ export component MainWindow inherits Window {
 
                         clicked => {
                             root.active-menu = 0;
-                            root.select-entry(idx);
-                            if (entry.is-dir) {
-                                root.open-entry(entry.name);
+                            root.show-context-menu = false;
+                            key-handler.focus();
+                            if (entry.name == "..") {
+                                root.open-entry("..");
+                            } else {
+                                root.select-entry-adv(idx, self.last-ctrl, self.last-shift);
                             }
+                        }
+
+                        double-clicked => {
+                            root.active-menu = 0;
+                            root.show-context-menu = false;
+                            root.open-entry(entry.name);
                         }
 
                         Rectangle {
@@ -704,13 +956,15 @@ export component MainWindow inherits Window {
                                     Image {
                                         source: entry.icon-kind == "dir"
                                             ? @image-url("../assets/icons/folder.svg")
-                                            : (entry.icon-kind == "exe"
-                                                ? @image-url("../assets/icons/file-exe.svg")
-                                                : (entry.icon-kind == "txt"
-                                                    ? @image-url("../assets/icons/file-txt.svg")
-                                                    : (entry.icon-kind == "dll"
-                                                        ? @image-url("../assets/icons/file-dll.svg")
-                                                        : @image-url("../assets/icons/file.svg"))));
+                                            : (entry.icon-kind == "zip"
+                                                ? @image-url("../assets/icon-window.png")
+                                                : (entry.icon-kind == "exe"
+                                                    ? @image-url("../assets/icons/file-exe.svg")
+                                                    : (entry.icon-kind == "txt"
+                                                        ? @image-url("../assets/icons/file-txt.svg")
+                                                        : (entry.icon-kind == "dll"
+                                                            ? @image-url("../assets/icons/file-dll.svg")
+                                                            : @image-url("../assets/icons/file.svg")))));
                                         x: 4px;
                                         y: 5px;
                                         width: 16px;
@@ -912,12 +1166,15 @@ export component MainWindow inherits Window {
     // ========================================================
 
     // Backdrop click-catcher to dismiss menu when clicking outside
-    if root.active-menu != 0 : TouchArea {
+    if root.active-menu != 0 || root.show-context-menu : TouchArea {
         x: 0px;
         y: 28px;
         width: parent.width;
         height: parent.height - 28px;
-        clicked => { root.active-menu = 0; }
+        clicked => {
+            root.active-menu = 0;
+            root.show-context-menu = false;
+        }
     }
 
     // 1. File Menu
@@ -961,9 +1218,10 @@ export component MainWindow inherits Window {
             DropdownMenuItem { text: root.arabic-mode ? "اختبار سلامة الأرشيف" : "Test archived files"; shortcut: "Alt+T"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.test-archive(); } }
             DropdownMenuItem { text: root.arabic-mode ? "عرض الملف" : "View file"; shortcut: "Alt+V"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.view-selected(); } }
             MenuDivider { dark-mode: root.dark-mode; }
+            DropdownMenuItem { text: root.arabic-mode ? "إعادة تسمية" : "Rename"; shortcut: "F2"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.start-rename(); } }
             DropdownMenuItem { text: root.arabic-mode ? "حذف الملفات" : "Delete files"; shortcut: "Del"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.delete-selected(); } }
-            DropdownMenuItem { text: root.arabic-mode ? "حماية الأرشيف" : "Protect archive from damage"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.toolbar-info("Protect"); } }
-            DropdownMenuItem { text: root.arabic-mode ? "إنشاء أرشيف تشغيل ذاتي SFX" : "Create SFX archive"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.toolbar-info("SFX"); } }
+            DropdownMenuItem { text: root.arabic-mode ? "تشفير وحماية الأرشيف بكلمة مرور" : "Password-protect archive"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.create-encrypted-archive(); } }
+            DropdownMenuItem { text: root.arabic-mode ? "إنشاء أرشيف تشغيل ذاتي SFX" : "Create SFX archive (.exe)"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.create-sfx-archive(); } }
         }
     }
 
@@ -979,9 +1237,9 @@ export component MainWindow inherits Window {
             padding: 4px;
             spacing: 1px;
 
-            DropdownMenuItem { text: root.arabic-mode ? "البحث عن ملفات..." : "Find files..."; shortcut: "Alt+F"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.toolbar-info("Find"); } }
+            DropdownMenuItem { text: root.arabic-mode ? "البحث عن ملفات..." : "Find files..."; shortcut: "Ctrl+F"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.show-find = true; } }
             DropdownMenuItem { text: root.arabic-mode ? "معلومات الأرشيف" : "Show information..."; shortcut: "Alt+I"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.show-archive-info(); } }
-            DropdownMenuItem { text: root.arabic-mode ? "معالج الاستخراج والضغط" : "Wizard..."; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.toolbar-info("Wizard"); } }
+            DropdownMenuItem { text: root.arabic-mode ? "معالج الاستخراج والضغط" : "Wizard..."; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.show-wizard = true; } }
             DropdownMenuItem { text: root.arabic-mode ? "فحص الأرشيف من الفيروسات" : "Scan archive for viruses"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.scan-viruses(); } }
             MenuDivider { dark-mode: root.dark-mode; }
             DropdownMenuItem { text: root.arabic-mode ? "اختبار الأداء والسرعة Benchmark" : "Benchmark & hardware test"; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.run-benchmark(); } }
@@ -1044,5 +1302,153 @@ export component MainWindow inherits Window {
             DropdownMenuItem { text: root.arabic-mode ? "التحقق من وجود تحديثات..." : "Check for updates..."; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.check-updates(); } }
             DropdownMenuItem { text: root.arabic-mode ? "حول Mickey RAR..." : "About Mickey RAR..."; dark-mode: root.dark-mode; activated => { root.active-menu = 0; root.show-about(); } }
         }
+    }
+
+    // 7. Drives & Quick Browse Dropdown (from Address Bar arrow)
+    if root.active-menu == 7 : DropdownMenu {
+        x: parent.width - 230px;
+        y: 132px;
+        width: 220px;
+        height: m7-layout.preferred-height;
+        dark-mode: root.dark-mode;
+
+        m7-layout := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+
+            for drv in root.available-drives : DropdownMenuItem {
+                text: (root.arabic-mode ? "قرص محلي " : "Local Disk ") + drv;
+                dark-mode: root.dark-mode;
+                activated => { root.active-menu = 0; root.navigate-path(drv); }
+            }
+            MenuDivider { dark-mode: root.dark-mode; }
+            DropdownMenuItem {
+                text: root.arabic-mode ? "استعراض مجلد..." : "Browse for folder...";
+                shortcut: "Ctrl+D";
+                dark-mode: root.dark-mode;
+                activated => { root.active-menu = 0; root.choose-folder(); }
+            }
+        }
+    }
+
+    // 8. In-App Right-Click Context Menu on File Rows
+    if root.show-context-menu : DropdownMenu {
+        x: root.context-menu-x;
+        y: root.context-menu-y;
+        width: 225px;
+        height: ctx-layout.preferred-height;
+        dark-mode: root.dark-mode;
+
+        ctx-layout := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+
+            DropdownMenuItem { text: root.arabic-mode ? "فتح / عرض" : "Open / View"; shortcut: "Enter"; dark-mode: root.dark-mode; activated => { root.show-context-menu = false; root.open-selected(); } }
+            DropdownMenuItem { text: root.arabic-mode ? "استخراج المحدد إلى..." : "Extract selected to..."; shortcut: "Alt+E"; dark-mode: root.dark-mode; activated => { root.show-context-menu = false; root.extract-archive(); } }
+            DropdownMenuItem { text: root.arabic-mode ? "إضافة إلى أرشيف..." : "Add to archive..."; shortcut: "Alt+A"; dark-mode: root.dark-mode; activated => { root.show-context-menu = false; root.create-archive(); } }
+            MenuDivider { dark-mode: root.dark-mode; }
+            DropdownMenuItem { text: root.arabic-mode ? "إعادة تسمية..." : "Rename..."; shortcut: "F2"; dark-mode: root.dark-mode; activated => { root.show-context-menu = false; root.start-rename(); } }
+            DropdownMenuItem { text: root.arabic-mode ? "نسخ المسار" : "Copy path"; shortcut: "Ctrl+C"; dark-mode: root.dark-mode; activated => { root.show-context-menu = false; root.copy-selected-path(); } }
+            MenuDivider { dark-mode: root.dark-mode; }
+            DropdownMenuItem { text: root.arabic-mode ? "حذف" : "Delete"; shortcut: "Del"; dark-mode: root.dark-mode; activated => { root.show-context-menu = false; root.delete-selected(); } }
+        }
+    }
+
+    // 9. Rename Modal Overlay
+    if root.show-rename : Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        background: #00000088;
+        TouchArea { clicked => { root.show-rename = false; } }
+
+        Rectangle {
+            x: (parent.width - 380px) / 2;
+            y: (parent.height - 155px) / 2;
+            width: 380px;
+            height: 155px;
+            border-radius: 6px;
+            background: root.dark-mode ? #202020 : #ffffff;
+            border-width: 1px;
+            border-color: #e8573f;
+            TouchArea {}
+
+            VerticalBox {
+                padding: 14px;
+                spacing: 10px;
+                Text {
+                    text: root.arabic-mode ? "إعادة تسمية العنصر" : "Rename Item";
+                    font-size: 14px;
+                    font-weight: 700;
+                    color: root.dark-mode ? #f0f0f0 : #1e1e1e;
+                }
+                LineEdit {
+                    text <=> root.rename-new-name;
+                    accepted => {
+                        root.show-rename = false;
+                        root.confirm-rename(root.rename-old-name, root.rename-new-name);
+                    }
+                }
+                HorizontalBox {
+                    alignment: end;
+                    spacing: 8px;
+                    Button {
+                        text: root.arabic-mode ? "إلغاء" : "Cancel";
+                        clicked => { root.show-rename = false; }
+                    }
+                    Button {
+                        text: root.arabic-mode ? "حفظ الاسم" : "Rename";
+                        clicked => {
+                            root.show-rename = false;
+                            root.confirm-rename(root.rename-old-name, root.rename-new-name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 10. Archive / Folder Information Modal Overlay
+    if root.show-info-dialog : Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        background: #00000088;
+        TouchArea { clicked => { root.show-info-dialog = false; } }
+
+        Rectangle {
+            x: (parent.width - 430px) / 2;
+            y: (parent.height - 230px) / 2;
+            width: 430px;
+            height: 230px;
+            border-radius: 6px;
+            background: root.dark-mode ? #202020 : #ffffff;
+            border-width: 1px;
+            border-color: #e8573f;
+            TouchArea {}
+
+            VerticalBox {
+                padding: 16px;
+                spacing: 10px;
+                Text {
+                    text: root.info-dialog-title;
+                    font-size: 15px;
+                    font-weight: 700;
+                    color: #e8573f;
+                }
+                Rectangle { height: 1px; background: root.dark-mode ? #363636 : #dddddd; }
+                Text {
+                    text: root.info-dialog-body;
+                    font-size: 12px;
+                    color: root.dark-mode ? #e0e0e0 : #222222;
+                    wrap: word-wrap;
+                }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalBox {
+                    alignment: end;
+                    Button {
+                        text: root.arabic-mode ? "حسناً" : "OK";
+                        clicked => { root.show-info-dialog = false; }
+                    }
+                }
+            }
+        }
+    }
     }
 }

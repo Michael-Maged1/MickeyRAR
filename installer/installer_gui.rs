@@ -60,6 +60,7 @@ slint! {
 const PROGRAM_BYTES: &[u8] = include_bytes!("../target/release/mickey-rar.exe");
 const SEVEN_ZIP_BYTES: &[u8] = include_bytes!("runtime/7z.exe");
 const SEVEN_ZIP_DLL_BYTES: &[u8] = include_bytes!("runtime/7z.dll");
+const SEVEN_ZIP_SFX_BYTES: &[u8] = include_bytes!("runtime/7z.sfx");
 const UNINSTALLER_BYTES: &[u8] = include_bytes!("../target/release/mickey-rar-uninstaller.exe");
 const ICON_BYTES: &[u8] = include_bytes!("../assets/icon.ico");
 
@@ -267,12 +268,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let executable = install_dir.join("mickey-rar.exe");
         let seven_zip = install_dir.join("7z.exe");
         let seven_zip_dll = install_dir.join("7z.dll");
+        let seven_zip_sfx = install_dir.join("7z.sfx");
         let uninstaller = install_dir.join("uninstall.exe");
         let icon_file = install_dir.join("icon.ico");
         if fs::create_dir_all(&install_dir).is_err()
             || fs::write(&executable, PROGRAM_BYTES).is_err()
             || fs::write(&seven_zip, SEVEN_ZIP_BYTES).is_err()
             || fs::write(&seven_zip_dll, SEVEN_ZIP_DLL_BYTES).is_err()
+            || fs::write(&seven_zip_sfx, SEVEN_ZIP_SFX_BYTES).is_err()
             || fs::write(&uninstaller, UNINSTALLER_BYTES).is_err()
             || fs::write(&icon_file, ICON_BYTES).is_err()
         {

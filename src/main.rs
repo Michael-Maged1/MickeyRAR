@@ -5,7 +5,12 @@ use i18n::Language;
 mod engine;
 mod winicon;
 mod drag_drop;
-use engine::{CompressionSettings, ProgressHandle, RunOutcome, create_arguments, create_arguments_for_format, delete_file_with_retry, is_archive_encrypted, run_7z, run_7z_cancellable_with_progress, test_archive_password};
+use engine::{
+    ArchiveCreationOptions, CompressionSettings, ProgressHandle, RunOutcome,
+    create_archive_command_args, delete_file_with_retry,
+    inspect_archive_encryption, run_7z, run_7z_cancellable_with_progress,
+    test_archive_password_fast, validate_archive_members_safe,
+};
 use slint::{Model, ModelRc, VecModel, Timer, TimerMode};
 use std::{cell::{Cell, RefCell}, fs, path::{Path, PathBuf}, rc::Rc, sync::{mpsc, Arc, Mutex, atomic::{AtomicBool, Ordering}}, thread, time::{Duration, Instant}};
 
@@ -307,31 +312,98 @@ slint::slint! {
     }
 
     export component ArchiveDialog inherits Window {
-        title: "Mickey RAR — Add to archive";
+        title: root.rtl ? "Mickey RAR — إضافة إلى أرشيف" : "Mickey RAR — Add to archive";
         icon: @image-url("../assets/icon-window.png");
-        width: 540px;
-        height: 390px;
+        width: 560px;
+        height: 455px;
         background: #202020;
+        in-out property <bool> rtl: false;
         in-out property <string> archive-name: "MickeyRAR-archive";
         in-out property <string> destination: "";
         in-out property <int> format-index: 0;
         in-out property <int> level-index: 4;
+        in-out property <string> password: "";
+        in-out property <bool> show-password: false;
+        in-out property <bool> encrypt-headers: true;
         in-out property <bool> delete-original: false;
         callback browse-location();
         callback start-compression();
         callback cancel();
 
-        VerticalBox { padding: 18px; spacing: 10px;
-            Text { text: "Add to archive"; color: #f3f7f1; font-size: 20px; font-weight: 700; }
-            Text { text: "Choose the archive name, location, format and compression level."; color: #aeb8ad; font-size: 12px; }
+        VerticalBox {
+            padding: 18px;
+            spacing: 9px;
+            Text {
+                text: root.rtl ? "إضافة إلى أرشيف مضغوط" : "Add to Archive";
+                color: #e8573f;
+                font-size: 19px;
+                font-weight: 700;
+            }
+            Text {
+                text: root.rtl
+                    ? "اختر اسم الأرشيف، الصيغة (ZIP / 7Z / SFX)، مستوى الضغط وكلمة المرور الاختيارية."
+                    : "Choose the archive name, format (ZIP / 7Z / SFX), compression level, and optional password.";
+                color: #aeb8ad;
+                font-size: 11.5px;
+            }
             Rectangle { height: 1px; background: #3a3a3a; }
-            HorizontalBox { spacing: 10px; Text { text: "Archive name:"; width: 125px; color: #e2e2e2; vertical-alignment: center; } LineEdit { text <=> root.archive-name; } }
-            HorizontalBox { spacing: 10px; Text { text: "Save location:"; width: 125px; color: #e2e2e2; vertical-alignment: center; } LineEdit { text <=> root.destination; } Button { text: "Browse..."; clicked => { root.browse-location(); } } }
-            HorizontalBox { spacing: 10px; Text { text: "Archive format:"; width: 125px; color: #e2e2e2; vertical-alignment: center; } ComboBox { model: ["ZIP", "7Z"]; current-index <=> root.format-index; } }
-            HorizontalBox { spacing: 10px; Text { text: "Compression level:"; width: 125px; color: #e2e2e2; vertical-alignment: center; } ComboBox { model: ["Store", "Fast", "Normal", "Maximum", "Ultra"]; current-index <=> root.level-index; } }
-            CheckBox { text: "Delete original files after successful compression"; checked <=> root.delete-original; }
+            HorizontalBox {
+                spacing: 10px;
+                Text { text: root.rtl ? "اسم الأرشيف:" : "Archive name:"; width: 135px; color: #e2e2e2; vertical-alignment: center; }
+                LineEdit { text <=> root.archive-name; accepted => { root.start-compression(); } }
+            }
+            HorizontalBox {
+                spacing: 10px;
+                Text { text: root.rtl ? "مكان الحفظ:" : "Save location:"; width: 135px; color: #e2e2e2; vertical-alignment: center; }
+                LineEdit { text <=> root.destination; }
+                Button { text: root.rtl ? "استعراض..." : "Browse..."; clicked => { root.browse-location(); } }
+            }
+            HorizontalBox {
+                spacing: 10px;
+                Text { text: root.rtl ? "صيغة الأرشيف:" : "Archive format:"; width: 135px; color: #e2e2e2; vertical-alignment: center; }
+                ComboBox {
+                    model: ["ZIP", "7Z", "SFX (.exe)"];
+                    current-index <=> root.format-index;
+                }
+            }
+            HorizontalBox {
+                spacing: 10px;
+                Text { text: root.rtl ? "مستوى الضغط:" : "Compression level:"; width: 135px; color: #e2e2e2; vertical-alignment: center; }
+                ComboBox {
+                    model: root.rtl
+                        ? ["تخزين فقط (Store)", "سريع (Fast)", "عادي (Normal)", "عالي (Maximum)", "فائق (Ultra)"]
+                        : ["Store", "Fast", "Normal", "Maximum", "Ultra"];
+                    current-index <=> root.level-index;
+                }
+            }
+            HorizontalBox {
+                spacing: 10px;
+                Text { text: root.rtl ? "كلمة المرور (اختياري):" : "Password (optional):"; width: 135px; color: #e2e2e2; vertical-alignment: center; }
+                LineEdit {
+                    text <=> root.password;
+                    input-type: root.show-password ? InputType.text : InputType.password;
+                    placeholder-text: root.rtl ? "اتركه فارغاً لبدون تشفير..." : "Leave empty for no password...";
+                }
+                CheckBox {
+                    text: root.rtl ? "إظهار" : "Show";
+                    checked <=> root.show-password;
+                }
+            }
+            if root.format-index >= 1 && root.password != "" : CheckBox {
+                text: root.rtl ? "تشفير أسماء الملفات أيضاً (-mhe=on)" : "Encrypt file names too (-mhe=on)";
+                checked <=> root.encrypt-headers;
+            }
+            CheckBox {
+                text: root.rtl ? "حذف الملفات الأصلية بعد نجاح عملية الضغط" : "Delete original files after successful compression";
+                checked <=> root.delete-original;
+            }
             Rectangle { vertical-stretch: 1; }
-            HorizontalBox { alignment: end; spacing: 8px; Button { text: "Cancel"; clicked => { root.cancel(); } } Button { text: "Create archive"; clicked => { root.start-compression(); } } }
+            HorizontalBox {
+                alignment: end;
+                spacing: 8px;
+                Button { text: root.rtl ? "إلغاء" : "Cancel"; clicked => { root.cancel(); } }
+                Button { text: root.rtl ? "إنشاء الأرشيف" : "Create archive"; clicked => { root.start-compression(); } }
+            }
         }
     }
 
@@ -440,11 +512,17 @@ struct AppState {
     /// In-memory cache of the parsed archive contents: (archive_path, items).
     /// Avoids re-invoking 7-Zip synchronously on every folder navigation inside large archives.
     archive_members: Option<(PathBuf, Vec<ArchiveItem>)>,
+    /// Cached password for the currently open encrypted archive so the user isn't prompted repeatedly.
+    archive_password: Option<(PathBuf, String)>,
     /// Current virtual directory inside the archive (e.g. "Blue Sky Lo-Fi/Fmp3/").
     /// Empty string means the root of the archive.
     archive_dir: String,
     paths: Vec<PathBuf>,
     pending_paths: Vec<PathBuf>,
+    sort_column: i32,
+    sort_ascending: bool,
+    last_selected_anchor: Option<usize>,
+    search_query: String,
 }
 
 fn context_paths() -> Vec<PathBuf> {
@@ -472,7 +550,6 @@ fn prompt_for_password(
     error_msg: Option<&str>,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     let ui = PasswordDialog::new()?;
-    quit_process_on_close(&ui.window());
     ui.set_rtl(arabic);
     ui.set_archive_name(archive_name.into());
     if let Some(err) = error_msg {
@@ -487,24 +564,52 @@ fn prompt_for_password(
         if let Some(ui) = weak.upgrade() {
             let pwd = ui.get_password().to_string();
             let _ = s1.send(Some(pwd));
+            let _ = ui.hide();
             let _ = slint::quit_event_loop();
         }
     });
     let s2 = sender.clone();
+    let weak_cancel = ui.as_weak();
     ui.on_cancel(move || {
         let _ = s2.send(None);
+        if let Some(ui) = weak_cancel.upgrade() {
+            let _ = ui.hide();
+        }
         let _ = slint::quit_event_loop();
+    });
+    let s3 = sender.clone();
+    ui.window().on_close_requested(move || {
+        let _ = s3.send(None);
+        let _ = slint::quit_event_loop();
+        slint::CloseRequestResponse::HideWindow
     });
 
     ui.run()?;
     Ok(receiver.try_recv().ok().flatten())
 }
 
-fn cleanup_zero_byte_files(dir: &Path) {
+fn snapshot_zero_byte_files(dir: &Path) -> std::collections::HashSet<PathBuf> {
+    let mut set = std::collections::HashSet::new();
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let p = entry.path();
             if p.is_file() {
+                if let Ok(meta) = p.metadata() {
+                    if meta.len() == 0 {
+                        set.insert(p);
+                    }
+                }
+            }
+        }
+    }
+    set
+}
+
+fn cleanup_new_zero_byte_files(dir: &Path, pre_existing: &std::collections::HashSet<PathBuf>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() && !pre_existing.contains(&p) {
                 if let Ok(meta) = p.metadata() {
                     if meta.len() == 0 {
                         let _ = fs::remove_file(&p);
@@ -527,13 +632,14 @@ fn resolve_archive_password(
     archive: &Path,
     arabic: bool,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    if !is_archive_encrypted(archive) {
+    let enc_info = inspect_archive_encryption(archive);
+    if !enc_info.is_encrypted {
         return Ok(None);
     }
 
-    // 1. Silently try common known default/blank passwords
+    // 1. Silently try common known default/blank passwords using fast single-file/header test
     for &cand in COMMON_DEFAULT_PASSWORDS {
-        if test_archive_password(archive, cand) {
+        if test_archive_password_fast(archive, cand, &enc_info, true) {
             return Ok(if cand.is_empty() { None } else { Some(cand.to_string()) });
         }
     }
@@ -544,7 +650,7 @@ fn resolve_archive_password(
     loop {
         match prompt_for_password(&name, arabic, err)? {
             Some(pwd) => {
-                if test_archive_password(archive, &pwd) {
+                if test_archive_password_fast(archive, &pwd, &enc_info, false) {
                     return Ok(Some(pwd));
                 } else {
                     err = Some(if arabic {
@@ -637,9 +743,17 @@ fn run_context_extraction_with_options(
     });
 
     let pause_weak = ui.as_weak();
+    let pause_handle = progress_handle.clone();
     ui.on_toggle_pause(move || {
         if let Some(ui) = pause_weak.upgrade() {
-            ui.set_is_paused(!ui.get_is_paused());
+            let next = !ui.get_is_paused();
+            pause_handle.paused.store(next, Ordering::SeqCst);
+            ui.set_is_paused(next);
+            ui.set_action_text(if next {
+                if arabic { "متوقف مؤقتاً (Paused)" } else { "paused" }.into()
+            } else {
+                if arabic { "جاري استخراج" } else { "extracting" }.into()
+            });
         }
     });
 
@@ -673,6 +787,15 @@ fn run_context_extraction_with_options(
             let abs_archive = if archive.is_absolute() { archive.clone() } else {
                 std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(archive)
             };
+            if password_worker.is_none() {
+                if let Ok(mems) = list_archive_members(&abs_archive) {
+                    if let Err(safety_err) = validate_archive_members_safe(mems.iter().map(|m| m.path.as_str())) {
+                        worker_finished.store(true, Ordering::SeqCst);
+                        let _ = sender.send(Err(safety_err));
+                        return;
+                    }
+                }
+            }
             let dest = if let Some(ref t) = target_dir {
                 t.clone()
             } else if extract_to_subfolder {
@@ -683,6 +806,7 @@ fn run_context_extraction_with_options(
                 abs_archive.parent().unwrap_or_else(|| Path::new(".")).to_path_buf()
             };
             let _ = std::fs::create_dir_all(&dest);
+            let pre_existing_zero = snapshot_zero_byte_files(&dest);
             // Build -oPath using OsString directly to avoid any UTF-8
             // round-trip that could corrupt non-ASCII (Arabic) folder names.
             let mut output_arg = std::ffi::OsString::from("-o");
@@ -701,13 +825,13 @@ fn run_context_extraction_with_options(
             }
             let res = run_7z_cancellable_with_progress(&args, None, &worker_cancelled, Some(&worker_progress));
             if let Err(e) = res {
-                cleanup_zero_byte_files(&dest);
+                cleanup_new_zero_byte_files(&dest, &pre_existing_zero);
                 worker_finished.store(true, Ordering::SeqCst);
                 let _ = sender.send(Err(e));
                 return;
             }
             if worker_cancelled.load(Ordering::Relaxed) {
-                cleanup_zero_byte_files(&dest);
+                cleanup_new_zero_byte_files(&dest, &pre_existing_zero);
                 worker_finished.store(true, Ordering::SeqCst);
                 let _ = sender.send(Ok(RunOutcome::Cancelled));
                 return;
@@ -739,6 +863,8 @@ fn run_context_extraction_with_options(
     let timer_arch_idx = current_archive_idx.clone();
     let timer_arch_title = current_archive_title.clone();
     let start_time = Instant::now();
+    let mut paused_accum = Duration::ZERO;
+    let mut pause_started: Option<Instant> = None;
     let timer = Timer::default();
     let mut shown_percent = u8::MAX;
     // Keeps the auto-close timer alive until it fires.
@@ -746,6 +872,17 @@ fn run_context_extraction_with_options(
 
     timer.start(TimerMode::Repeated, Duration::from_millis(80), move || {
         if let Some(ui) = weak.upgrade() {
+            let is_paused = timer_progress.paused.load(Ordering::Relaxed);
+            if is_paused {
+                if pause_started.is_none() {
+                    pause_started = Some(Instant::now());
+                }
+            } else if let Some(ps) = pause_started.take() {
+                paused_accum += ps.elapsed();
+            }
+            let current_pause = pause_started.map(|ps| ps.elapsed()).unwrap_or(Duration::ZERO);
+            let active_elapsed = start_time.elapsed().saturating_sub(paused_accum + current_pause);
+
             let percent = timer_progress.percent.load(Ordering::Relaxed);
             let cur_file = timer_progress.current_file.lock().map(|l| l.clone()).unwrap_or_default();
             if !cur_file.is_empty() {
@@ -767,7 +904,7 @@ fn run_context_extraction_with_options(
             };
             let total_percent = (total_frac * 100.0).round() as i32;
 
-            let elapsed_secs = start_time.elapsed().as_secs();
+            let elapsed_secs = active_elapsed.as_secs();
             let elapsed_str = format!("{:02}:{:02}:{:02}", elapsed_secs / 3600, (elapsed_secs % 3600) / 60, elapsed_secs % 60);
             ui.set_elapsed_time(elapsed_str.into());
 
@@ -984,12 +1121,36 @@ fn quit_process_on_close(window: &slint::Window) {
     window.on_close_requested(|| std::process::exit(0));
 }
 
-fn run_context_compression_with_options(paths: Vec<PathBuf>, output: PathBuf, format: &str, level: u8, delete_original: bool, arabic: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_context_compression_with_options(
+    paths: Vec<PathBuf>,
+    output: PathBuf,
+    format: &str,
+    level: u8,
+    delete_original: bool,
+    arabic: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let base_settings = load_settings();
+    let opts = ArchiveCreationOptions {
+        format: format.to_string(),
+        level,
+        solid: base_settings.solid,
+        threads: base_settings.threads,
+        password: None,
+        encrypt_headers: false,
+    };
+    run_context_compression_full(paths, output, opts, delete_original, arabic)
+}
+
+fn run_context_compression_full(
+    paths: Vec<PathBuf>,
+    output: PathBuf,
+    opts: ArchiveCreationOptions,
+    delete_original: bool,
+    arabic: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     if paths.is_empty() { return Err("No files were selected".into()); }
-    let mut settings = load_settings();
-    settings.level = level;
-    let (cwd, args) = create_arguments_for_format(&output, &paths, &settings, format).map_err(|e| format!("{e}"))?;
-    let format_name = format.to_ascii_uppercase();
+    let (cwd, args) = create_archive_command_args(&output, &paths, &opts).map_err(|e| format!("{e}"))?;
+    let format_name = opts.format.to_ascii_uppercase();
     let paths_for_delete = paths.clone();
     // Only a brand-new archive may be thrown away on failure/cancel. If the
     // user asked to add to an archive that already exists, deleting it would
@@ -1053,9 +1214,18 @@ fn run_context_compression_with_options(paths: Vec<PathBuf>, output: PathBuf, fo
     });
 
     let pause_weak = ui.as_weak();
+    let pause_handle = progress_handle.clone();
+    let fmt_for_pause = format_name.clone();
     ui.on_toggle_pause(move || {
         if let Some(ui) = pause_weak.upgrade() {
-            ui.set_is_paused(!ui.get_is_paused());
+            let next = !ui.get_is_paused();
+            pause_handle.paused.store(next, Ordering::SeqCst);
+            ui.set_is_paused(next);
+            ui.set_action_text(if next {
+                if arabic { "متوقف مؤقتاً (Paused)".to_string() } else { "paused".to_string() }
+            } else {
+                if arabic { format!("جاري ضغط ({fmt_for_pause})") } else { format!("compressing ({fmt_for_pause})") }
+            }.into());
         }
     });
 
@@ -1082,17 +1252,27 @@ fn run_context_compression_with_options(paths: Vec<PathBuf>, output: PathBuf, fo
     let timer_receiver = receiver.clone();
     let timer_progress = progress_handle.clone();
     let start_time = Instant::now();
+    let mut paused_accum = Duration::ZERO;
+    let mut pause_started: Option<Instant> = None;
     let timer = Timer::default();
     let mut shown_percent = u8::MAX;
     timer.start(TimerMode::Repeated, Duration::from_millis(80), move || {
         if let Some(ui) = weak.upgrade() {
+            let is_paused = timer_progress.paused.load(Ordering::Relaxed);
+            if is_paused {
+                if pause_started.is_none() { pause_started = Some(Instant::now()); }
+            } else if let Some(ps) = pause_started.take() {
+                paused_accum += ps.elapsed();
+            }
+            let current_pause = pause_started.map(|ps| ps.elapsed()).unwrap_or(Duration::ZERO);
+            let elapsed_secs = start_time.elapsed().saturating_sub(paused_accum + current_pause).as_secs();
+
             let percent = timer_progress.percent.load(Ordering::Relaxed);
             let cur_file = timer_progress.current_file.lock().map(|l| l.clone()).unwrap_or_default();
             if !cur_file.is_empty() {
                 ui.set_current_file(cur_file.into());
             }
 
-            let elapsed_secs = start_time.elapsed().as_secs();
             let elapsed_str = format!("{:02}:{:02}:{:02}", elapsed_secs / 3600, (elapsed_secs % 3600) / 60, elapsed_secs % 60);
             ui.set_elapsed_time(elapsed_str.into());
 
@@ -1150,14 +1330,25 @@ struct ArchiveRequest {
     destination: PathBuf,
     format: String,
     level: u8,
+    password: Option<String>,
+    encrypt_headers: bool,
     delete_original: bool,
 }
 
 fn run_archive_dialog(paths: Vec<PathBuf>, arabic: bool) -> Result<(), Box<dyn std::error::Error>> {
     if paths.is_empty() { return Err("No files were selected".into()); }
     let default_folder = paths[0].parent().ok_or("Cannot determine the selected file folder")?.to_path_buf();
+    let default_stem = if paths.len() == 1 {
+        paths[0].file_stem().unwrap_or_default().to_string_lossy().to_string()
+    } else {
+        default_folder.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "MickeyRAR-archive".into())
+    };
     let ui = ArchiveDialog::new()?;
     quit_process_on_close(&ui.window());
+    ui.set_rtl(arabic);
+    if !default_stem.is_empty() {
+        ui.set_archive_name(default_stem.into());
+    }
     ui.set_destination(default_folder.display().to_string().into());
     let (sender, receiver) = mpsc::channel::<Option<ArchiveRequest>>();
     let weak = ui.as_weak();
@@ -1176,11 +1367,20 @@ fn run_archive_dialog(paths: Vec<PathBuf>, arabic: bool) -> Result<(), Box<dyn s
         move || {
             if let Some(ui) = weak.upgrade() {
                 let level = match ui.get_level_index() { 0 => 0, 1 => 3, 2 => 5, 3 => 7, _ => 9 };
+                let format = match ui.get_format_index() {
+                    1 => "7z",
+                    2 => "sfx",
+                    _ => "zip",
+                };
+                let pwd_raw = ui.get_password().to_string();
+                let password = if pwd_raw.is_empty() { None } else { Some(pwd_raw) };
                 let _ = sender.send(Some(ArchiveRequest {
                     name: ui.get_archive_name().to_string(),
                     destination: PathBuf::from(ui.get_destination().to_string()),
-                    format: if ui.get_format_index() == 1 { "7z".into() } else { "zip".into() },
+                    format: format.into(),
                     level,
+                    password,
+                    encrypt_headers: ui.get_encrypt_headers(),
                     delete_original: ui.get_delete_original(),
                 }));
                 let _ = slint::quit_event_loop();
@@ -1195,10 +1395,22 @@ fn run_archive_dialog(paths: Vec<PathBuf>, arabic: bool) -> Result<(), Box<dyn s
     let Some(Some(request)) = receiver.try_iter().last() else { return Ok(()); };
     let mut name = PathBuf::from(request.name.trim());
     if name.file_name().is_none() { return Err("Archive name is required".into()); }
-    let extension = request.format.as_str();
-    if name.extension().is_none() { name.set_extension(extension); }
+    let file_ext = match request.format.as_str() {
+        "sfx" => "exe",
+        other => other,
+    };
+    name.set_extension(file_ext);
     let output = request.destination.join(name.file_name().unwrap());
-    run_context_compression_with_options(paths, output, extension, request.level, request.delete_original, arabic)
+    let base_settings = load_settings();
+    let opts = ArchiveCreationOptions {
+        format: request.format,
+        level: request.level,
+        solid: base_settings.solid,
+        threads: base_settings.threads,
+        password: request.password,
+        encrypt_headers: request.encrypt_headers,
+    };
+    run_context_compression_full(paths, output, opts, request.delete_original, arabic)
 }
 
 fn supported_archive(p: &Path) -> bool {
@@ -1222,6 +1434,9 @@ fn settings_path() -> PathBuf {
 fn language_path() -> PathBuf {
     settings_path().with_file_name(".mickey-rar-language.conf")
 }
+fn theme_path() -> PathBuf {
+    settings_path().with_file_name(".mickey-rar-theme.conf")
+}
 fn load_language() -> Language {
     fs::read_to_string(language_path())
         .map(|s| Language::from_code(&s))
@@ -1229,6 +1444,124 @@ fn load_language() -> Language {
 }
 fn save_language(lang: Language) -> Result<(), String> {
     fs::write(language_path(), lang.code()).map_err(|e| e.to_string())
+}
+fn load_dark_mode() -> bool {
+    fs::read_to_string(theme_path())
+        .map(|s| !s.trim().eq_ignore_ascii_case("light"))
+        .unwrap_or(true)
+}
+fn save_dark_mode(dark: bool) -> Result<(), String> {
+    fs::write(theme_path(), if dark { "dark" } else { "light" }).map_err(|e| e.to_string())
+}
+
+fn detect_available_drives() -> Vec<slint::SharedString> {
+    #[cfg(windows)]
+    {
+        let mut drives = Vec::new();
+        for letter in b'A'..=b'Z' {
+            let root = format!("{}:\\", letter as char);
+            if Path::new(&root).exists() {
+                drives.push(root.into());
+            }
+        }
+        if drives.is_empty() {
+            drives.push("C:\\".into());
+        }
+        drives
+    }
+    #[cfg(not(windows))]
+    {
+        let mut drives = vec![slint::SharedString::from("/")];
+        if let Ok(entries) = fs::read_dir("/Volumes") {
+            for e in entries.flatten() {
+                drives.push(e.path().display().to_string().into());
+            }
+        }
+        drives
+    }
+}
+
+fn parse_formatted_bytes(s: &str) -> u64 {
+    let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
+    digits.parse::<u64>().unwrap_or(0)
+}
+
+fn parse_modified_sort_key(s: &str) -> (u32, u32, u32, u32, u32) {
+    // Matches "dd/mm/yyyy HH:MM"
+    let bytes = s.trim();
+    if bytes.len() >= 16 {
+        let d = bytes.get(0..2).and_then(|v| v.parse().ok()).unwrap_or(0);
+        let m = bytes.get(3..5).and_then(|v| v.parse().ok()).unwrap_or(0);
+        let y = bytes.get(6..10).and_then(|v| v.parse().ok()).unwrap_or(0);
+        let hh = bytes.get(11..13).and_then(|v| v.parse().ok()).unwrap_or(0);
+        let mm = bytes.get(14..16).and_then(|v| v.parse().ok()).unwrap_or(0);
+        return (y, m, d, hh, mm);
+    }
+    (0, 0, 0, 0, 0)
+}
+
+fn sort_file_entries(entries: &mut [FileEntry], sort_column: i32, ascending: bool) {
+    let start = if entries.first().map(|e| e.name.as_str() == "..").unwrap_or(false) {
+        1
+    } else {
+        0
+    };
+    if entries.len() <= start + 1 {
+        return;
+    }
+    entries[start..].sort_by(|a, b| {
+        // Keep folders grouped above files just like WinRAR & Explorer
+        if a.is_dir != b.is_dir {
+            return b.is_dir.cmp(&a.is_dir);
+        }
+        let ord = match sort_column {
+            1 => parse_formatted_bytes(&a.size)
+                .cmp(&parse_formatted_bytes(&b.size))
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+            2 => parse_formatted_bytes(&a.packed)
+                .cmp(&parse_formatted_bytes(&b.packed))
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+            3 => a.entry_type
+                .to_lowercase()
+                .cmp(&b.entry_type.to_lowercase())
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+            4 => parse_modified_sort_key(&a.modified)
+                .cmp(&parse_modified_sort_key(&b.modified))
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+            5 => a.crc32
+                .to_lowercase()
+                .cmp(&b.crc32.to_lowercase())
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        };
+        if ascending { ord } else { ord.reverse() }
+    });
+}
+
+fn collect_folder_search_hits(
+    base: &Path,
+    current: &Path,
+    query_lower: &str,
+    depth: usize,
+    out: &mut Vec<PathBuf>,
+) {
+    if depth > 4 || out.len() >= 1000 {
+        return;
+    }
+    let Ok(rd) = fs::read_dir(current) else { return; };
+    for entry in rd.flatten() {
+        if out.len() >= 1000 {
+            break;
+        }
+        let path = entry.path();
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if name.to_lowercase().contains(query_lower) {
+            out.push(path.clone());
+        }
+        if path.is_dir() && base != Path::new("") {
+            collect_folder_search_hits(base, &path, query_lower, depth + 1, out);
+        }
+    }
 }
 fn load_settings() -> CompressionSettings {
     let mut settings = CompressionSettings::default();
@@ -1286,7 +1619,7 @@ fn determine_type_and_icon(name: &str, is_dir: bool, arabic: bool) -> (String, S
             if arabic { "امتداد تطبيق".into() } else { "Application extension".into() },
             "dll".into(),
         ),
-        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" => (
+        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "iso" | "cab" | "wim" | "tgz" | "tbz2" | "txz" | "z" => (
             if arabic { "أرشيف".into() } else { "Archive".into() },
             "zip".into(),
         ),
@@ -1302,11 +1635,23 @@ fn determine_type_and_icon(name: &str, is_dir: bool, arabic: bool) -> (String, S
 }
 
 fn show_folder(ui: &MainWindow, state: &Rc<RefCell<AppState>>) -> Result<(), String> {
-    let folder = state.borrow().folder.clone();
+    let (folder, query, sort_col, sort_asc) = {
+        let s = state.borrow();
+        (
+            s.folder.clone(),
+            s.search_query.trim().to_string(),
+            s.sort_column,
+            s.sort_ascending,
+        )
+    };
     let mut items = Vec::new();
-    for e in fs::read_dir(&folder).map_err(|e| e.to_string())? {
-        let e = e.map_err(|e| e.to_string())?;
-        items.push(e.path());
+    if query.is_empty() {
+        for e in fs::read_dir(&folder).map_err(|e| e.to_string())? {
+            let e = e.map_err(|e| e.to_string())?;
+            items.push(e.path());
+        }
+    } else {
+        collect_folder_search_hits(&folder, &folder, &query.to_lowercase(), 0, &mut items);
     }
     items.sort_by_key(|p| (!p.is_dir(), p.file_name().map(|x| x.to_string_lossy().to_lowercase())));
 
@@ -1316,7 +1661,7 @@ fn show_folder(ui: &MainWindow, state: &Rc<RefCell<AppState>>) -> Result<(), Str
     let mut total_files = 0usize;
     let mut total_bytes = 0u64;
 
-    if folder.parent().is_some() {
+    if folder.parent().is_some() || !query.is_empty() {
         entries.push(FileEntry {
             name: "..".into(),
             size: "".into(),
@@ -1331,9 +1676,15 @@ fn show_folder(ui: &MainWindow, state: &Rc<RefCell<AppState>>) -> Result<(), Str
     }
 
     for p in &items {
-        let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let display_name = if query.is_empty() {
+            p.file_name().unwrap_or_default().to_string_lossy().into_owned()
+        } else {
+            p.strip_prefix(&folder)
+                .map(|rel| rel.display().to_string())
+                .unwrap_or_else(|_| p.file_name().unwrap_or_default().to_string_lossy().into_owned())
+        };
         let is_dir = p.is_dir();
-        let (entry_type, icon_kind) = determine_type_and_icon(&name, is_dir, arabic);
+        let (entry_type, icon_kind) = determine_type_and_icon(&display_name, is_dir, arabic);
         let meta = p.metadata().ok();
         let (size_str, mod_str) = if let Some(m) = meta {
             let size = if is_dir {
@@ -1354,7 +1705,7 @@ fn show_folder(ui: &MainWindow, state: &Rc<RefCell<AppState>>) -> Result<(), Str
         };
 
         entries.push(FileEntry {
-            name: name.into(),
+            name: display_name.into(),
             size: size_str.into(),
             packed: "".into(),
             entry_type: entry_type.into(),
@@ -1366,10 +1717,13 @@ fn show_folder(ui: &MainWindow, state: &Rc<RefCell<AppState>>) -> Result<(), Str
         });
     }
 
+    sort_file_entries(&mut entries, sort_col, sort_asc);
+
     {
         let mut s = state.borrow_mut();
         s.paths = items;
         s.archive = None;
+        s.last_selected_anchor = None;
     }
 
     ui.set_location(folder.display().to_string().into());
@@ -1415,11 +1769,23 @@ struct ArchiveItem {
 }
 
 fn list_archive_members(archive: &Path) -> Result<Vec<ArchiveItem>, String> {
+    list_archive_members_with_password(archive, None)
+}
+
+fn list_archive_members_with_password(
+    archive: &Path,
+    password: Option<&str>,
+) -> Result<Vec<ArchiveItem>, String> {
+    let pwd_flag = match password {
+        Some(p) => format!("-p{p}"),
+        None => "-p".to_string(),
+    };
     let out = run_text_args(&[
         "l".as_ref(),
         "-slt".as_ref(),
         "-sccUTF-8".as_ref(),
         "-mmt=on".as_ref(),
+        pwd_flag.as_ref(),
         archive.as_os_str(),
     ])?;
     let mut in_contents = false;
@@ -1506,6 +1872,7 @@ fn show_archive(ui: &MainWindow, state: &Rc<RefCell<AppState>>,
     if !supported_archive(&archive) {
         return Err(format!("Unsupported archive format: {}", archive.display()));
     }
+    let arabic = ui.get_arabic_mode();
     let cached_members = {
         let s = state.borrow();
         if let Some((ref cached_path, ref mems)) = s.archive_members {
@@ -1521,13 +1888,50 @@ fn show_archive(ui: &MainWindow, state: &Rc<RefCell<AppState>>,
     let members = match cached_members {
         Some(mems) => mems,
         None => {
-            let mems = list_archive_members(&archive)?;
+            let cached_pwd = state
+                .borrow()
+                .archive_password
+                .as_ref()
+                .and_then(|(p, pwd)| if p == &archive { Some(pwd.clone()) } else { None });
+            let mems = match list_archive_members_with_password(&archive, cached_pwd.as_deref()) {
+                Ok(m) => m,
+                Err(err)
+                    if err.contains("Wrong password")
+                        || err.contains("Can not open encrypted")
+                        || err.contains("Enter password") =>
+                {
+                    match resolve_archive_password(&archive, arabic).map_err(|e| e.to_string())? {
+                        Some(ref s) if s == "__CANCELLED__" => {
+                            return Err(if arabic {
+                                "تم إلغاء فتح الأرشيف المشفر".into()
+                            } else {
+                                "Cancelled opening encrypted archive".into()
+                            });
+                        }
+                        Some(pwd) => {
+                            let m = list_archive_members_with_password(&archive, Some(&pwd))?;
+                            state.borrow_mut().archive_password = Some((archive.clone(), pwd));
+                            m
+                        }
+                        None => return Err(err),
+                    }
+                }
+                Err(e) => return Err(e),
+            };
+            validate_archive_members_safe(mems.iter().map(|m| m.path.as_str()))?;
             state.borrow_mut().archive_members = Some((archive.clone(), mems.clone()));
             mems
         }
     };
-    let arabic = ui.get_arabic_mode();
-    let current_dir = state.borrow().archive_dir.clone();
+    let (current_dir, search_query, sort_col, sort_asc) = {
+        let s = state.borrow();
+        (
+            s.archive_dir.clone(),
+            s.search_query.trim().to_string(),
+            s.sort_column,
+            s.sort_ascending,
+        )
+    };
 
     // Normalize current_dir: ensure it ends with '/' (or is empty for root)
     let prefix = if current_dir.is_empty() {
@@ -1555,6 +1959,65 @@ fn show_archive(ui: &MainWindow, state: &Rc<RefCell<AppState>>,
         icon_kind: "dir".into(),
         is_selected: false,
     });
+
+    if !search_query.is_empty() {
+        let q_low = search_query.to_lowercase();
+        for m in &members {
+            let clean_path = m.path.replace('\\', "/").trim_end_matches('/').to_string();
+            if clean_path.is_empty() {
+                continue;
+            }
+            let base_name = clean_path.rsplit('/').next().unwrap_or(&clean_path);
+            if base_name.to_lowercase().contains(&q_low) || clean_path.to_lowercase().contains(&q_low) {
+                if m.is_dir {
+                    total_folders += 1;
+                } else {
+                    total_files += 1;
+                    total_bytes += m.size;
+                }
+                let (entry_type, icon_kind) = determine_type_and_icon(&clean_path, m.is_dir, arabic);
+                let size_str = if m.is_dir { String::new() } else { format_size(m.size) };
+                let packed_str = if !m.is_dir && m.packed_size > 0 { format_size(m.packed_size) } else { String::new() };
+                let mod_str = if !m.modified.is_empty() {
+                    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&m.modified, "%Y-%m-%d %H:%M:%S") {
+                        dt.format("%d/%m/%Y %H:%M").to_string()
+                    } else {
+                        m.modified.clone()
+                    }
+                } else {
+                    String::new()
+                };
+                entries.push(FileEntry {
+                    name: clean_path.into(),
+                    size: size_str.into(),
+                    packed: packed_str.into(),
+                    entry_type: entry_type.into(),
+                    modified: mod_str.into(),
+                    crc32: m.crc.clone().into(),
+                    is_dir: m.is_dir,
+                    icon_kind: icon_kind.into(),
+                    is_selected: false,
+                });
+            }
+        }
+        sort_file_entries(&mut entries, sort_col, sort_asc);
+        let location = format!("{}\\[Search: {}]", archive.display(), search_query);
+        ui.set_location(location.into());
+        ui.set_entries(ModelRc::new(VecModel::from(entries)));
+        ui.set_selected_index(-1);
+        let sel_msg = if arabic { "تم تحديد 0 بايت في 0 ملفات" } else { "Selected 0 bytes in 0 files" };
+        let tot_msg = if arabic {
+            format!("نتائج البحث: {} مجلدات و {} بايت في {} ملفات", total_folders, format_size(total_bytes), total_files)
+        } else {
+            format!("Search results: {} folders and {} bytes in {} files", total_folders, format_size(total_bytes), total_files)
+        };
+        ui.set_selected_info(sel_msg.into());
+        ui.set_total_info(tot_msg.into());
+        let mut s = state.borrow_mut();
+        s.archive = Some(archive);
+        s.last_selected_anchor = None;
+        return Ok(());
+    }
 
     // Collect unique child names at the current directory level.
     // A "child" is either:
@@ -1741,6 +2204,8 @@ fn show_archive(ui: &MainWindow, state: &Rc<RefCell<AppState>>,
         });
     }
 
+    sort_file_entries(&mut entries, sort_col, sort_asc);
+
     // Update location bar: show archive path + virtual directory
     let location = if current_dir.is_empty() {
         archive.display().to_string()
@@ -1762,7 +2227,11 @@ fn show_archive(ui: &MainWindow, state: &Rc<RefCell<AppState>>,
     };
     ui.set_selected_info(sel_msg.into());
     ui.set_total_info(tot_msg.into());
-    state.borrow_mut().archive = Some(archive);
+    {
+        let mut s = state.borrow_mut();
+        s.archive = Some(archive);
+        s.last_selected_anchor = None;
+    }
     Ok(())
 }
 
@@ -2006,19 +2475,22 @@ fn run_in_app_extraction(
     archive: PathBuf,
     dest: PathBuf,
     selected_files: Vec<String>,
+    cached_password: Option<String>,
     arabic: bool,
     main_ui: slint::Weak<MainWindow>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut password: Option<String> = None;
-    match resolve_archive_password(&archive, arabic)? {
-        Some(ref p) if p == "__CANCELLED__" => {
-            if let Some(m) = main_ui.upgrade() {
-                m.set_status(if arabic { "تم إلغاء فك الضغط" } else { "Extraction cancelled" }.into());
+    let mut password: Option<String> = cached_password;
+    if password.is_none() {
+        match resolve_archive_password(&archive, arabic)? {
+            Some(ref p) if p == "__CANCELLED__" => {
+                if let Some(m) = main_ui.upgrade() {
+                    m.set_status(if arabic { "تم إلغاء فك الضغط" } else { "Extraction cancelled" }.into());
+                }
+                return Ok(());
             }
-            return Ok(());
+            Some(pwd) => password = Some(pwd),
+            None => {}
         }
-        Some(pwd) => password = Some(pwd),
-        None => {}
     }
 
     let progress_ui = ProgressWindow::new()?;
@@ -2055,9 +2527,17 @@ fn run_in_app_extraction(
     });
 
     let p_weak_pause = progress_ui.as_weak();
+    let pause_handle = progress_handle.clone();
     progress_ui.on_toggle_pause(move || {
         if let Some(p) = p_weak_pause.upgrade() {
-            p.set_is_paused(!p.get_is_paused());
+            let next = !p.get_is_paused();
+            pause_handle.paused.store(next, Ordering::SeqCst);
+            p.set_is_paused(next);
+            p.set_action_text(if next {
+                if arabic { "متوقف مؤقتاً (Paused)" } else { "paused" }.into()
+            } else {
+                if arabic { "جاري استخراج" } else { "extracting" }.into()
+            });
         }
     });
 
@@ -2073,6 +2553,16 @@ fn run_in_app_extraction(
 
     thread::spawn(move || {
         let _ = std::fs::create_dir_all(&dest_clone);
+        let pre_existing_zero = snapshot_zero_byte_files(&dest_clone);
+        if password.is_none() {
+            if let Ok(mems) = list_archive_members(&archive_clone) {
+                if let Err(safety_err) = validate_archive_members_safe(mems.iter().map(|m| m.path.as_str())) {
+                    worker_finished.store(true, Ordering::SeqCst);
+                    let _ = sender.send(Err(safety_err));
+                    return;
+                }
+            }
+        }
         // Build -oPath using OsString directly to preserve non-ASCII (Arabic) folder names.
         let mut output_arg = std::ffi::OsString::from("-o");
         output_arg.push(dest_clone.as_os_str());
@@ -2088,16 +2578,16 @@ fn run_in_app_extraction(
         if let Some(ref pwd) = password {
             args.push(std::ffi::OsString::from(format!("-p{pwd}")));
         }
-        // Only append file filters when user selected specific files;
-        // passing no filters extracts everything (correct default).
-        for f in selected_clone {
-            // 7-Zip glob pattern: wrap in quotes for paths with spaces.
-            args.push(std::ffi::OsString::from(f));
+        if !selected_clone.is_empty() {
+            args.push(std::ffi::OsString::from("--"));
+            for f in selected_clone {
+                args.push(std::ffi::OsString::from(f));
+            }
         }
 
         let res = run_7z_cancellable_with_progress(&args, None, &worker_cancelled, Some(&worker_progress));
-        if res.is_err() {
-            cleanup_zero_byte_files(&dest_clone);
+        if res.is_err() || matches!(res, Ok(RunOutcome::Cancelled)) {
+            cleanup_new_zero_byte_files(&dest_clone, &pre_existing_zero);
         }
         // Store 100% only on success so the UI shows the real final percent on error.
         if matches!(res, Ok(RunOutcome::Finished)) {
@@ -2118,6 +2608,8 @@ fn run_in_app_extraction(
     let timer_progress = progress_handle.clone();
     let timer_receiver = Arc::new(Mutex::new(receiver));
     let start_time = Instant::now();
+    let mut paused_accum = Duration::ZERO;
+    let mut pause_started: Option<Instant> = None;
     let mut shown_percent = u8::MAX;
     let timer_self = timer.clone();
     let progress_ui_keep = Rc::new(progress_ui);
@@ -2127,13 +2619,21 @@ fn run_in_app_extraction(
     new_timer.start(TimerMode::Repeated, Duration::from_millis(80), move || {
         let _keep = &progress_ui_ref;
         if let Some(ui) = p_weak.upgrade() {
+            let is_paused = timer_progress.paused.load(Ordering::Relaxed);
+            if is_paused {
+                if pause_started.is_none() { pause_started = Some(Instant::now()); }
+            } else if let Some(ps) = pause_started.take() {
+                paused_accum += ps.elapsed();
+            }
+            let current_pause = pause_started.map(|ps| ps.elapsed()).unwrap_or(Duration::ZERO);
+            let elapsed_secs = start_time.elapsed().saturating_sub(paused_accum + current_pause).as_secs();
+
             let percent = timer_progress.percent.load(Ordering::Relaxed);
             let cur_file = timer_progress.current_file.lock().map(|l| l.clone()).unwrap_or_default();
             if !cur_file.is_empty() {
                 ui.set_current_file(cur_file.into());
             }
 
-            let elapsed_secs = start_time.elapsed().as_secs();
             let elapsed_str = format!("{:02}:{:02}:{:02}", elapsed_secs / 3600, (elapsed_secs % 3600) / 60, elapsed_secs % 60);
             ui.set_elapsed_time(elapsed_str.into());
 
@@ -2195,6 +2695,386 @@ fn run_in_app_extraction(
     Ok(())
 }
 
+fn open_file_with_os(path: &Path) {
+    #[cfg(windows)]
+    {
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        let _ = cmd.args(["/c", "start", "", &path.to_string_lossy()]).spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(path).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+    }
+}
+
+fn copy_text_to_clipboard(text: &str) -> bool {
+    use std::io::Write;
+    #[cfg(windows)]
+    {
+        let mut cmd = std::process::Command::new("clip.exe");
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.stdin(std::process::Stdio::piped());
+        if let Ok(mut child) = cmd.spawn() {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            return child.wait().map(|s| s.success()).unwrap_or(false);
+        }
+        false
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = std::process::Command::new("pbcopy");
+        cmd.stdin(std::process::Stdio::piped());
+        if let Ok(mut child) = cmd.spawn() {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            return child.wait().map(|s| s.success()).unwrap_or(false);
+        }
+        false
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = text;
+        false
+    }
+}
+
+fn run_in_app_compression(
+    paths: Vec<PathBuf>,
+    output: PathBuf,
+    opts: ArchiveCreationOptions,
+    delete_original: bool,
+    arabic: bool,
+    main_ui: slint::Weak<MainWindow>,
+    state: Rc<RefCell<AppState>>,
+) -> Result<(), String> {
+    let (cwd, args) = create_archive_command_args(&output, &paths, &opts)?;
+    let format_name = opts.format.to_ascii_uppercase();
+    let output_existed = output.is_file();
+
+    let progress_ui = ProgressWindow::new().map_err(|e| e.to_string())?;
+    progress_ui.set_rtl(arabic);
+    let archive_name = output.file_name().unwrap_or_default().to_string_lossy().to_string();
+    progress_ui.set_archive_name(archive_name.clone().into());
+    progress_ui.set_current_file(archive_name.into());
+    progress_ui.set_action_text(
+        if arabic {
+            format!("جاري ضغط ({format_name})")
+        } else {
+            format!("compressing ({format_name})")
+        }
+        .into(),
+    );
+    progress_ui.set_progress(0.0);
+    center_window(&progress_ui.window());
+    progress_ui.show().map_err(|e| e.to_string())?;
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let progress_handle = ProgressHandle::new();
+    let worker_cancelled = cancelled.clone();
+    let worker_progress = progress_handle.clone();
+    let (sender, receiver) = mpsc::channel();
+
+    let cancel_flag = cancelled.clone();
+    let p_weak_cancel = progress_ui.as_weak();
+    progress_ui.on_cancel(move || {
+        cancel_flag.store(true, Ordering::SeqCst);
+        if let Some(p) = p_weak_cancel.upgrade() {
+            let _ = p.hide();
+        }
+    });
+
+    let p_weak_bg = progress_ui.as_weak();
+    progress_ui.on_toggle_background(move || {
+        if let Some(p) = p_weak_bg.upgrade() {
+            let _ = p.hide();
+        }
+    });
+
+    let p_weak_pause = progress_ui.as_weak();
+    let pause_handle = progress_handle.clone();
+    let fmt_pause = format_name.clone();
+    progress_ui.on_toggle_pause(move || {
+        if let Some(p) = p_weak_pause.upgrade() {
+            let next = !p.get_is_paused();
+            pause_handle.paused.store(next, Ordering::SeqCst);
+            p.set_is_paused(next);
+            p.set_action_text(
+                if next {
+                    if arabic { "متوقف مؤقتاً (Paused)".into() } else { "paused".into() }
+                } else if arabic {
+                    format!("جاري ضغط ({fmt_pause})")
+                } else {
+                    format!("compressing ({fmt_pause})")
+                }
+                .into(),
+            );
+        }
+    });
+
+    progress_ui.on_show_mode(|| {});
+    progress_ui.on_show_help(|| {
+        let _ = webbrowser::open("https://github.com/Michael-Maged1/MickeyRAR");
+    });
+
+    let close_cancelled = cancelled.clone();
+    progress_ui.window().on_close_requested(move || {
+        close_cancelled.store(true, Ordering::SeqCst);
+        slint::CloseRequestResponse::HideWindow
+    });
+
+    let worker_output = output.clone();
+    let paths_for_delete = paths.clone();
+    thread::spawn(move || {
+        let res = run_7z_cancellable_with_progress(&args, Some(&cwd), &worker_cancelled, Some(&worker_progress));
+        match res {
+            Ok(RunOutcome::Finished) => {
+                worker_progress.percent.store(100, Ordering::Relaxed);
+                if delete_original {
+                    for p in paths_for_delete {
+                        let _ = if p.is_dir() { fs::remove_dir_all(&p) } else { fs::remove_file(&p) };
+                    }
+                }
+            }
+            _ => {
+                if !output_existed {
+                    let _ = delete_file_with_retry(&worker_output, 25);
+                }
+            }
+        }
+        let _ = sender.send(res);
+    });
+
+    let timer = Rc::new(RefCell::new(None));
+    let timer_self = timer.clone();
+    let timer_progress = progress_handle.clone();
+    let timer_receiver = Arc::new(Mutex::new(receiver));
+    let start_time = Instant::now();
+    let mut paused_accum = Duration::ZERO;
+    let mut pause_started: Option<Instant> = None;
+    let p_weak = progress_ui.as_weak();
+    let progress_ui_keep = Rc::new(progress_ui);
+
+    let new_timer = Timer::default();
+    new_timer.start(TimerMode::Repeated, Duration::from_millis(80), move || {
+        let _keep = &progress_ui_keep;
+        if let Some(ui) = p_weak.upgrade() {
+            let is_paused = timer_progress.paused.load(Ordering::Relaxed);
+            if is_paused {
+                if pause_started.is_none() { pause_started = Some(Instant::now()); }
+            } else if let Some(ps) = pause_started.take() {
+                paused_accum += ps.elapsed();
+            }
+            let cur_pause = pause_started.map(|ps| ps.elapsed()).unwrap_or(Duration::ZERO);
+            let elapsed_secs = start_time.elapsed().saturating_sub(paused_accum + cur_pause).as_secs();
+
+            let percent = timer_progress.percent.load(Ordering::Relaxed);
+            let cur_file = timer_progress.current_file.lock().map(|l| l.clone()).unwrap_or_default();
+            if !cur_file.is_empty() {
+                ui.set_current_file(cur_file.into());
+            }
+            let elapsed_str = format!("{:02}:{:02}:{:02}", elapsed_secs / 3600, (elapsed_secs % 3600) / 60, elapsed_secs % 60);
+            ui.set_elapsed_time(elapsed_str.into());
+            if percent > 0 && percent < 100 {
+                let total_est = (elapsed_secs as f64) / (percent as f64 / 100.0);
+                let rem_secs = (total_est - elapsed_secs as f64).max(0.0) as u64;
+                let rem_str = format!("{:02}:{:02}:{:02}", rem_secs / 3600, (rem_secs % 3600) / 60, rem_secs % 60);
+                ui.set_time_left(rem_str.into());
+            } else if percent >= 100 {
+                ui.set_time_left("00:00:00".into());
+            } else {
+                ui.set_time_left("--:--:--".into());
+            }
+            let frac = (percent as f32 / 100.0).clamp(0.0, 1.0);
+            ui.set_progress(frac);
+            ui.set_file_progress(frac);
+            ui.set_file_percent(percent as i32);
+            ui.set_total_progress(frac);
+            ui.set_total_percent(percent as i32);
+
+            if let Ok(result) = timer_receiver.lock().unwrap().try_recv() {
+                let status_msg = match result {
+                    Ok(RunOutcome::Finished) => {
+                        if arabic {
+                            format!("تم إنشاء الأرشيف بنجاح ✔: {}", output.display())
+                        } else {
+                            format!("Archive created successfully ✔: {}", output.display())
+                        }
+                    }
+                    Ok(RunOutcome::Cancelled) => {
+                        if arabic { "تم إلغاء عملية الضغط".into() } else { "Compression cancelled".into() }
+                    }
+                    Err(e) => format!("Error: {e}"),
+                };
+                let _ = ui.hide();
+                if let Some(m) = main_ui.upgrade() {
+                    if state.borrow().archive.is_none() {
+                        let _ = show_folder(&m, &state);
+                    }
+                    m.set_status(status_msg.into());
+                }
+                let _ = timer_self.borrow_mut().take();
+            }
+        }
+    });
+    *timer.borrow_mut() = Some(new_timer);
+    Ok(())
+}
+
+fn open_in_app_archive_dialog(
+    main_ui: slint::Weak<MainWindow>,
+    state: Rc<RefCell<AppState>>,
+    compression: Rc<RefCell<CompressionSettings>>,
+    initial_format_idx: i32,
+    require_password_hint: bool,
+) {
+    let Some(m_ui) = main_ui.upgrade() else { return; };
+    let arabic = m_ui.get_arabic_mode();
+
+    let mut chosen_paths = std::mem::take(&mut state.borrow_mut().pending_paths);
+    if chosen_paths.is_empty() && state.borrow().archive.is_none() {
+        let folder = state.borrow().folder.clone();
+        let model = m_ui.get_entries();
+        for i in 0..model.row_count() {
+            if let Some(e) = model.row_data(i) {
+                if e.is_selected && e.name != ".." {
+                    let candidate = folder.join(e.name.as_str());
+                    if candidate.exists() {
+                        chosen_paths.push(candidate);
+                    }
+                }
+            }
+        }
+    }
+    if chosen_paths.is_empty() {
+        let cur_folder = state.borrow().folder.clone();
+        if let Some(files) = rfd::FileDialog::new().set_directory(&cur_folder).pick_files() {
+            chosen_paths = files;
+        }
+    }
+    if chosen_paths.is_empty() {
+        return;
+    }
+
+    let Ok(dialog) = ArchiveDialog::new() else { return; };
+    dialog.set_rtl(arabic);
+    dialog.set_format_index(initial_format_idx);
+    if require_password_hint && initial_format_idx == 0 {
+        // Default encrypted archives to 7Z so filename encryption (-mhe=on) is available
+        dialog.set_format_index(1);
+    }
+    let default_dest = chosen_paths[0]
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| state.borrow().folder.clone());
+    let default_stem = if chosen_paths.len() == 1 {
+        chosen_paths[0].file_stem().unwrap_or_default().to_string_lossy().to_string()
+    } else {
+        default_dest
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "MickeyRAR-archive".into())
+    };
+    if !default_stem.is_empty() {
+        dialog.set_archive_name(default_stem.into());
+    }
+    dialog.set_destination(default_dest.display().to_string().into());
+    center_window(&dialog.window());
+    if dialog.show().is_err() {
+        return;
+    }
+
+    let dialog_rc = Rc::new(RefCell::new(Some(dialog)));
+    let d_ref = dialog_rc.borrow();
+    let Some(dlg) = d_ref.as_ref() else { return; };
+
+    let dlg_weak = dlg.as_weak();
+    dlg.on_browse_location(move || {
+        if let Some(d) = dlg_weak.upgrade() {
+            let cur = PathBuf::from(d.get_destination().to_string());
+            if let Some(folder) = rfd::FileDialog::new().set_directory(cur).pick_folder() {
+                d.set_destination(folder.display().to_string().into());
+            }
+        }
+    });
+
+    let holder_cancel = dialog_rc.clone();
+    dlg.on_cancel(move || {
+        if let Some(d) = holder_cancel.borrow_mut().take() {
+            let _ = d.hide();
+        }
+    });
+
+    let holder_close = dialog_rc.clone();
+    dlg.window().on_close_requested(move || {
+        let _ = holder_close.borrow_mut().take();
+        slint::CloseRequestResponse::HideWindow
+    });
+
+    let holder_start = dialog_rc.clone();
+    dlg.on_start_compression(move || {
+        let Some(d) = holder_start.borrow_mut().take() else { return; };
+        let level = match d.get_level_index() {
+            0 => 0,
+            1 => 3,
+            2 => 5,
+            3 => 7,
+            _ => 9,
+        };
+        let format = match d.get_format_index() {
+            1 => "7z",
+            2 => "sfx",
+            _ => "zip",
+        };
+        let pwd_str = d.get_password().to_string();
+        let password = if pwd_str.is_empty() { None } else { Some(pwd_str) };
+        let encrypt_headers = d.get_encrypt_headers();
+        let delete_original = d.get_delete_original();
+        let raw_name = d.get_archive_name().to_string();
+        let dest_dir = PathBuf::from(d.get_destination().to_string());
+        let _ = d.hide();
+
+        let mut name_path = PathBuf::from(raw_name.trim());
+        if name_path.file_name().is_none() {
+            name_path = PathBuf::from("MickeyRAR-archive");
+        }
+        let ext = if format == "sfx" { "exe" } else { format };
+        name_path.set_extension(ext);
+        let output = dest_dir.join(name_path.file_name().unwrap());
+
+        let comp = compression.borrow().clone();
+        let opts = ArchiveCreationOptions {
+            format: format.into(),
+            level,
+            solid: comp.solid,
+            threads: comp.threads,
+            password,
+            encrypt_headers,
+        };
+        if let Err(err) = run_in_app_compression(
+            chosen_paths.clone(),
+            output,
+            opts,
+            delete_original,
+            arabic,
+            main_ui.clone(),
+            state.clone(),
+        ) {
+            if let Some(m) = main_ui.upgrade() {
+                m.set_status(format!("Error: {err}").into());
+            }
+        }
+    });
+}
+
 fn status_error(ui: &MainWindow, result: Result<(), String>) {
     if let Err(e) = result { ui.set_status(format!("Error: {e}").into()); }
 }
@@ -2222,9 +3102,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let language = Rc::new(RefCell::new(load_language()));
     ui.set_arabic_mode(language.borrow().is_arabic());
+    ui.set_dark_mode(load_dark_mode());
+    let drives_vec = detect_available_drives();
+    ui.set_available_drives(ModelRc::new(VecModel::from(drives_vec)));
     let snap_dark = std::env::args().any(|a| a == "--snap-dark");
     let snap_light = std::env::args().any(|a| a == "--snap-light");
-    if snap_light || std::env::args().any(|a| a == "--light") {
+    if snap_dark {
+        ui.set_dark_mode(true);
+    } else if snap_light || std::env::args().any(|a| a == "--light") {
         ui.set_dark_mode(false);
     }
     let snap_timer = Timer::default();
@@ -2243,7 +3128,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_toggle_theme({
         let weak = ui.as_weak();
         move || {
-            if let Some(ui) = weak.upgrade() { ui.set_dark_mode(!ui.get_dark_mode()); }
+            if let Some(ui) = weak.upgrade() {
+                let next = !ui.get_dark_mode();
+                ui.set_dark_mode(next);
+                let _ = save_dark_mode(next);
+            }
         }
     });
     ui.on_open_url(|url| {
@@ -2255,7 +3144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let weak = ui.as_weak();
         move |tool| {
             if let Some(ui) = weak.upgrade() {
-                let message = if ui.get_arabic_mode() { format!("أداة {} جاهزة للإضافة لاحقاً", tool) } else { format!("{} tool is ready for the next feature update", tool) };
+                let message = if ui.get_arabic_mode() { format!("أداة {} جاهزة", tool) } else { format!("{} ready", tool) };
                 ui.set_status(message.into());
             }
         }
@@ -2271,9 +3160,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         folder: initial_folder,
         archive: open_archive_path.clone(),
         archive_members: None,
+        archive_password: None,
         archive_dir: String::new(),
         paths: Vec::new(),
         pending_paths,
+        sort_column: 0,
+        sort_ascending: true,
+        last_selected_anchor: None,
+        search_query: String::new(),
     }));
     if let Some(archive_path) = open_archive_path {
         status_error(&ui, show_archive(&ui, &state, archive_path));
@@ -2301,6 +3195,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     { let weak = ui.as_weak(); let state = state.clone();
       ui.on_nav_up(move || {
           if let Some(ui) = weak.upgrade() {
+              if !state.borrow().search_query.is_empty() {
+                  state.borrow_mut().search_query.clear();
+                  ui.set_find_query("".into());
+                  ui.set_show_find(false);
+                  let archive = state.borrow().archive.clone();
+                  let res = match archive {
+                      Some(p) => show_archive(&ui, &state, p),
+                      None => show_folder(&ui, &state),
+                  };
+                  status_error(&ui, res);
+                  return;
+              }
               let is_archive = state.borrow().archive.is_some();
               if is_archive {
                   let current_dir = state.borrow().archive_dir.clone();
@@ -2316,9 +3222,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                       status_error(&ui, show_archive(&ui, &state, archive));
                   } else {
                       // At archive root - exit archive view
-                      state.borrow_mut().archive = None;
-                      state.borrow_mut().archive_dir.clear();
-                      state.borrow_mut().archive_members = None;
+                      let mut s = state.borrow_mut();
+                      s.archive = None;
+                      s.archive_dir.clear();
+                      s.archive_members = None;
+                      s.archive_password = None;
+                      drop(s);
                       status_error(&ui, show_folder(&ui, &state));
                   }
               } else {
@@ -2331,45 +3240,68 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           }
       }); }
 
-    { let weak = ui.as_weak();
+    {
+        let weak = ui.as_weak();
+        let state = state.clone();
+        ui.on_sort_by(move |col| {
+            if let Some(ui) = weak.upgrade() {
+                let (next_col, next_asc) = {
+                    let mut s = state.borrow_mut();
+                    if s.sort_column == col {
+                        s.sort_ascending = !s.sort_ascending;
+                    } else {
+                        s.sort_column = col;
+                        s.sort_ascending = true;
+                    }
+                    (s.sort_column, s.sort_ascending)
+                };
+                ui.set_sort_column(next_col);
+                ui.set_sort_ascending(next_asc);
+                let model = ui.get_entries();
+                let mut vec: Vec<FileEntry> = (0..model.row_count()).filter_map(|i| model.row_data(i)).collect();
+                sort_file_entries(&mut vec, next_col, next_asc);
+                ui.set_entries(ModelRc::new(VecModel::from(vec)));
+            }
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        let state = state.clone();
+        ui.on_select_entry_adv(move |idx, ctrl, shift| {
+            if let Some(ui) = weak.upgrade() {
+                let model = ui.get_entries();
+                let count = model.row_count();
+                if idx < 0 || (idx as usize) >= count { return; }
+                let target = idx as usize;
+                let anchor = state.borrow().last_selected_anchor;
+
+                if shift {
+                    let start = anchor.unwrap_or(target).min(target);
+                    let end = anchor.unwrap_or(target).max(target);
+                    update_selection(&ui, |i, _| i >= start && i <= end);
+                    ui.set_selected_index(idx);
+                } else if ctrl {
+                    update_selection(&ui, |i, e| if i == target { !e.is_selected } else { e.is_selected });
+                    state.borrow_mut().last_selected_anchor = Some(target);
+                    ui.set_selected_index(idx);
+                } else {
+                    update_selection(&ui, |i, _| i == target);
+                    state.borrow_mut().last_selected_anchor = Some(target);
+                    ui.set_selected_index(idx);
+                }
+            }
+        });
+    }
+
+    { let weak = ui.as_weak(); let state = state.clone();
       ui.on_select_entry(move |idx| {
           if let Some(ui) = weak.upgrade() {
-              let model = ui.get_entries();
-              let count = model.row_count();
-              if idx < 0 || idx as usize >= count { return; }
-              let mut updated = Vec::with_capacity(count);
-              let mut sel_size = String::new();
-              let mut is_file = false;
-
-              for i in 0..count {
-                  if let Some(mut entry) = model.row_data(i) {
-                      let selected = i == idx as usize;
-                      entry.is_selected = selected;
-                      if selected && !entry.is_dir && entry.name != ".." {
-                          sel_size = entry.size.to_string();
-                          is_file = true;
-                      }
-                      updated.push(entry);
-                  }
-              }
-              ui.set_entries(ModelRc::new(VecModel::from(updated)));
+              if idx < 0 { return; }
+              let target = idx as usize;
+              update_selection(&ui, |i, _| i == target);
+              state.borrow_mut().last_selected_anchor = Some(target);
               ui.set_selected_index(idx);
-
-              if is_file && !sel_size.is_empty() {
-                  let text = if ui.get_arabic_mode() {
-                      format!("تم تحديد {} بايت في ملف واحد", sel_size)
-                  } else {
-                      format!("Selected {} bytes in 1 files", sel_size)
-                  };
-                  ui.set_selected_info(text.into());
-              } else {
-                  let text = if ui.get_arabic_mode() {
-                      "تم تحديد 0 بايت في 0 ملفات"
-                  } else {
-                      "Selected 0 bytes in 0 files"
-                  };
-                  ui.set_selected_info(text.into());
-              }
           }
       }); }
     let compression = Rc::new(RefCell::new(load_settings()));
@@ -2421,42 +3353,148 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     { let weak = ui.as_weak(); let state = state.clone();
       ui.on_choose_folder(move || {
         if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-            state.borrow_mut().folder = folder;
-            state.borrow_mut().archive = None;
-            state.borrow_mut().archive_dir.clear();
-            state.borrow_mut().archive_members = None;
-            if let Some(ui) = weak.upgrade() { status_error(&ui, show_folder(&ui, &state)); }
+            {
+                let mut s = state.borrow_mut();
+                s.folder = folder;
+                s.archive = None;
+                s.archive_dir.clear();
+                s.archive_members = None;
+                s.archive_password = None;
+                s.search_query.clear();
+            }
+            if let Some(ui) = weak.upgrade() {
+                ui.set_find_query("".into());
+                ui.set_show_find(false);
+                status_error(&ui, show_folder(&ui, &state));
+            }
         }
       }); }
+
+    {
+        let weak = ui.as_weak();
+        let state = state.clone();
+        ui.on_navigate_path(move |raw_path| {
+            let Some(ui) = weak.upgrade() else { return; };
+            let trimmed = raw_path.trim().trim_matches('"');
+            if trimmed.is_empty() { return; }
+            let target = PathBuf::from(trimmed);
+            if target.is_dir() {
+                {
+                    let mut s = state.borrow_mut();
+                    s.folder = target;
+                    s.archive = None;
+                    s.archive_dir.clear();
+                    s.archive_members = None;
+                    s.archive_password = None;
+                    s.search_query.clear();
+                }
+                ui.set_find_query("".into());
+                ui.set_show_find(false);
+                status_error(&ui, show_folder(&ui, &state));
+            } else if target.is_file() && supported_archive(&target) {
+                {
+                    let mut s = state.borrow_mut();
+                    if let Some(parent) = target.parent() {
+                        s.folder = parent.to_path_buf();
+                    }
+                    s.archive_members = None;
+                    s.archive_password = None;
+                    s.archive_dir.clear();
+                    s.search_query.clear();
+                }
+                ui.set_find_query("".into());
+                ui.set_show_find(false);
+                status_error(&ui, show_archive(&ui, &state, target));
+            } else {
+                let msg = if ui.get_arabic_mode() {
+                    format!("المسار غير موجود أو غير مدعوم: {}", trimmed)
+                } else {
+                    format!("Path not found or unsupported: {}", trimmed)
+                };
+                ui.set_status(msg.into());
+            }
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        let state = state.clone();
+        ui.on_run_find(move |query| {
+            if let Some(ui) = weak.upgrade() {
+                state.borrow_mut().search_query = query.to_string();
+                let archive = state.borrow().archive.clone();
+                let res = match archive {
+                    Some(p) => show_archive(&ui, &state, p),
+                    None => show_folder(&ui, &state),
+                };
+                status_error(&ui, res);
+            }
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        let state = state.clone();
+        ui.on_clear_find(move || {
+            if let Some(ui) = weak.upgrade() {
+                state.borrow_mut().search_query.clear();
+                let archive = state.borrow().archive.clone();
+                let res = match archive {
+                    Some(p) => show_archive(&ui, &state, p),
+                    None => show_folder(&ui, &state),
+                };
+                status_error(&ui, res);
+            }
+        });
+    }
+
     { let weak = ui.as_weak(); let state = state.clone();
       ui.on_refresh(move || { if let Some(ui) = weak.upgrade() {
           state.borrow_mut().archive_members = None;
+          let drives_vec = detect_available_drives();
+          ui.set_available_drives(ModelRc::new(VecModel::from(drives_vec)));
           let archive = state.borrow().archive.clone();
           let result = match archive { Some(p) => show_archive(&ui, &state, p), None => show_folder(&ui, &state) };
           status_error(&ui, result);
       }}); }
-    { let weak = ui.as_weak(); let state = state.clone();
-      ui.on_open_entry(move |entry| {
-        if let Some(ui) = weak.upgrade() {
+
+    let open_entry_impl: Rc<dyn Fn(String)> = {
+        let weak = ui.as_weak();
+        let state = state.clone();
+        Rc::new(move |entry: String| {
+            let Some(ui) = weak.upgrade() else { return; };
             if entry == ".." {
+                if !state.borrow().search_query.is_empty() {
+                    state.borrow_mut().search_query.clear();
+                    ui.set_find_query("".into());
+                    ui.set_show_find(false);
+                    let archive = state.borrow().archive.clone();
+                    let res = match archive {
+                        Some(p) => show_archive(&ui, &state, p),
+                        None => show_folder(&ui, &state),
+                    };
+                    status_error(&ui, res);
+                    return;
+                }
                 let is_archive = state.borrow().archive.is_some();
                 if is_archive {
                     let current_dir = state.borrow().archive_dir.clone();
                     if !current_dir.is_empty() {
-                        // Navigate up within the archive virtual directory
                         let new_dir = if let Some(pos) = current_dir.trim_end_matches('/').rfind('/') {
                             current_dir[..pos].to_string()
                         } else {
-                            String::new() // Back to archive root
+                            String::new()
                         };
                         state.borrow_mut().archive_dir = new_dir;
                         let archive = state.borrow().archive.clone().unwrap();
                         status_error(&ui, show_archive(&ui, &state, archive));
                     } else {
-                        // At archive root - exit archive view
-                        state.borrow_mut().archive = None;
-                        state.borrow_mut().archive_dir.clear();
-                        state.borrow_mut().archive_members = None;
+                        let mut s = state.borrow_mut();
+                        s.archive = None;
+                        s.archive_dir.clear();
+                        s.archive_members = None;
+                        s.archive_password = None;
+                        drop(s);
                         status_error(&ui, show_folder(&ui, &state));
                     }
                 } else {
@@ -2468,33 +3506,163 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 return;
             }
+
             if state.borrow().archive.is_some() {
-                // Inside an archive: navigate into the clicked folder
+                // Check whether the double-clicked row inside the archive is a folder or a file
+                let model = ui.get_entries();
+                let mut clicked_is_dir = false;
+                for i in 0..model.row_count() {
+                    if let Some(r) = model.row_data(i) {
+                        if r.name.as_str() == entry {
+                            clicked_is_dir = r.is_dir;
+                            break;
+                        }
+                    }
+                }
+                let in_search = !state.borrow().search_query.trim().is_empty();
                 let current_dir = state.borrow().archive_dir.clone();
-                let new_dir = if current_dir.is_empty() {
-                    entry.to_string()
+                let full_item = if in_search || current_dir.is_empty() {
+                    entry.clone()
                 } else {
-                    format!("{}/{}", current_dir, entry)
+                    format!("{}/{}", current_dir.trim_end_matches('/'), entry)
                 };
-                state.borrow_mut().archive_dir = new_dir;
-                let archive = state.borrow().archive.clone().unwrap();
-                status_error(&ui, show_archive(&ui, &state, archive));
+
+                if clicked_is_dir {
+                    {
+                        let mut s = state.borrow_mut();
+                        s.search_query.clear();
+                        s.archive_dir = full_item;
+                    }
+                    ui.set_find_query("".into());
+                    ui.set_show_find(false);
+                    let archive = state.borrow().archive.clone().unwrap();
+                    status_error(&ui, show_archive(&ui, &state, archive));
+                } else {
+                    // File inside archive: extract to temp and open with OS viewer
+                    let archive_path = state.borrow().archive.clone().unwrap();
+                    let mut pwd = state
+                        .borrow()
+                        .archive_password
+                        .as_ref()
+                        .and_then(|(ap, p)| if ap == &archive_path { Some(p.clone()) } else { None });
+                    if pwd.is_none() {
+                        match resolve_archive_password(&archive_path, ui.get_arabic_mode()).unwrap_or(None) {
+                            Some(ref s) if s == "__CANCELLED__" => return,
+                            Some(p) => {
+                                state.borrow_mut().archive_password = Some((archive_path.clone(), p.clone()));
+                                pwd = Some(p);
+                            }
+                            None => {}
+                        }
+                    }
+                    let temp_dir = std::env::temp_dir().join("MickeyRAR_View");
+                    let _ = std::fs::create_dir_all(&temp_dir);
+                    let mut out_flag = std::ffi::OsString::from("-o");
+                    out_flag.push(temp_dir.as_os_str());
+                    let mut args = vec![
+                        std::ffi::OsString::from("e"),
+                        std::ffi::OsString::from("-y"),
+                        std::ffi::OsString::from("-aoa"),
+                        out_flag,
+                        archive_path.as_os_str().to_owned(),
+                        std::ffi::OsString::from("--"),
+                        std::ffi::OsString::from(&full_item),
+                    ];
+                    if let Some(ref p) = pwd {
+                        args.insert(3, std::ffi::OsString::from(format!("-p{p}")));
+                    }
+                    match run_7z(&args, None) {
+                        Ok(_) => {
+                            let fname = Path::new(&full_item)
+                                .file_name()
+                                .unwrap_or_else(|| std::ffi::OsStr::new(&entry));
+                            let extracted = temp_dir.join(fname);
+                            open_file_with_os(&extracted);
+                            ui.set_status(
+                                if ui.get_arabic_mode() {
+                                    format!("تم فتح الملف: {}", entry)
+                                } else {
+                                    format!("Opened file: {}", entry)
+                                }
+                                .into(),
+                            );
+                        }
+                        Err(e) => ui.set_status(format!("Error opening file: {e}").into()),
+                    }
+                }
                 return;
             }
+
             let p = state.borrow().folder.join(&entry);
             if p.is_dir() {
-                state.borrow_mut().archive_members = None;
-                state.borrow_mut().folder = p;
+                {
+                    let mut s = state.borrow_mut();
+                    s.archive_members = None;
+                    s.archive_password = None;
+                    s.search_query.clear();
+                    s.folder = p;
+                }
+                ui.set_find_query("".into());
+                ui.set_show_find(false);
                 status_error(&ui, show_folder(&ui, &state));
-            }
-            else if supported_archive(&p) {
-                state.borrow_mut().archive_members = None;
-                state.borrow_mut().archive_dir.clear();
+            } else if supported_archive(&p) {
+                {
+                    let mut s = state.borrow_mut();
+                    if let Some(parent) = p.parent() {
+                        s.folder = parent.to_path_buf();
+                    }
+                    s.archive_members = None;
+                    s.archive_password = None;
+                    s.archive_dir.clear();
+                    s.search_query.clear();
+                }
+                ui.set_find_query("".into());
+                ui.set_show_find(false);
                 status_error(&ui, show_archive(&ui, &state, p));
+            } else if p.exists() {
+                open_file_with_os(&p);
+                ui.set_status(
+                    if ui.get_arabic_mode() {
+                        format!("تم فتح: {}", entry)
+                    } else {
+                        format!("Opened: {}", entry)
+                    }
+                    .into(),
+                );
             }
-            else { ui.set_status(format!("Selected: {}", p.display()).into()); }
-        }
-      }); }
+        })
+    };
+
+    {
+        let open_cb = open_entry_impl.clone();
+        ui.on_open_entry(move |entry| {
+            open_cb(entry.to_string());
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        let open_cb = open_entry_impl.clone();
+        ui.on_open_selected(move || {
+            let Some(ui) = weak.upgrade() else { return; };
+            let model = ui.get_entries();
+            let sel_idx = ui.get_selected_index();
+            if sel_idx >= 0 && (sel_idx as usize) < model.row_count() {
+                if let Some(e) = model.row_data(sel_idx as usize) {
+                    open_cb(e.name.to_string());
+                    return;
+                }
+            }
+            for i in 0..model.row_count() {
+                if let Some(e) = model.row_data(i) {
+                    if e.is_selected {
+                        open_cb(e.name.to_string());
+                        return;
+                    }
+                }
+            }
+        });
+    }
 
     let is_dragging = Rc::new(Cell::new(false));
     {
@@ -2647,59 +3815,83 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       ui.on_open_archive(move || {
         if let Some(p) = rfd::FileDialog::new().pick_file() {
             if let Some(ui) = weak.upgrade() {
-                state.borrow_mut().archive_members = None;
-                state.borrow_mut().archive_dir.clear();
+                let mut s = state.borrow_mut();
+                s.archive_members = None;
+                s.archive_password = None;
+                s.archive_dir.clear();
+                s.search_query.clear();
+                drop(s);
+                ui.set_find_query("".into());
+                ui.set_show_find(false);
                 status_error(&ui, show_archive(&ui, &state, p));
             }
         }
       }); }
     { let weak = ui.as_weak(); let state = state.clone(); let compression = compression.clone();
       ui.on_create_archive(move || {
-        let context_files = std::mem::take(&mut state.borrow_mut().pending_paths);
-        let files = if context_files.is_empty() {
-            rfd::FileDialog::new().pick_files()
-        } else {
-            Some(context_files)
-        };
-        if let Some(files) = files {
-            if let Some(out) = rfd::FileDialog::new().set_file_name("archive.zip").save_file() {
-                if let Some(ui) = weak.upgrade() {
-                    let result = create_arguments(&out, &files, &compression.borrow())
-                        .and_then(|(cwd, args)| run_7z(&args, Some(&cwd)));
-                    match result {
-                        Ok(_) => ui.set_status(format!("Created: {}", out.display()).into()),
-                        Err(e) => ui.set_status(format!("Error: {e}").into()),
+        open_in_app_archive_dialog(weak.clone(), state.clone(), compression.clone(), 0, false);
+      }); }
+    { let weak = ui.as_weak(); let state = state.clone(); let compression = compression.clone();
+      ui.on_create_encrypted_archive(move || {
+        open_in_app_archive_dialog(weak.clone(), state.clone(), compression.clone(), 1, true);
+      }); }
+    { let weak = ui.as_weak(); let state = state.clone(); let compression = compression.clone();
+      ui.on_create_sfx_archive(move || {
+        open_in_app_archive_dialog(weak.clone(), state.clone(), compression.clone(), 2, false);
+      }); }
+    { let weak = ui.as_weak(); let state = state.clone();
+      ui.on_extract_archive(move || {
+        let mut selected = state.borrow().archive.clone();
+        if selected.is_none() {
+            if let Some(ui) = weak.upgrade() {
+                let model = ui.get_entries();
+                let folder = state.borrow().folder.clone();
+                for i in 0..model.row_count() {
+                    if let Some(e) = model.row_data(i) {
+                        if e.is_selected && !e.is_dir && e.name != ".." {
+                            let candidate = folder.join(e.name.as_str());
+                            if supported_archive(&candidate) {
+                                selected = Some(candidate);
+                                break;
+                            }
+                        }
                     }
                 }
             }
         }
-      }); }
-    { let weak = ui.as_weak(); let state = state.clone();
-      ui.on_extract_archive(move || {
-        let selected = state.borrow().archive.clone()
-            .or_else(|| rfd::FileDialog::new().pick_file());
+        let selected = selected.or_else(|| rfd::FileDialog::new().pick_file());
         if let Some(p) = selected {
             let default_folder = p.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
             if let Some(dest) = rfd::FileDialog::new().set_directory(&default_folder).pick_folder() {
                 if let Some(ui) = weak.upgrade() {
                     let arabic = ui.get_arabic_mode();
-                    let model = ui.get_entries();
-                    let count = model.row_count();
                     let mut selected_files = Vec::new();
-                    let current_dir = state.borrow().archive_dir.clone();
-                    for i in 0..count {
-                        if let Some(entry) = model.row_data(i) {
-                            if entry.is_selected && entry.name != ".." {
-                                let full_path = if current_dir.is_empty() {
-                                    entry.name.to_string()
-                                } else {
-                                    format!("{}/{}", current_dir.trim_end_matches('/'), entry.name)
-                                };
-                                selected_files.push(full_path);
+                    if state.borrow().archive.as_ref() == Some(&p) {
+                        let model = ui.get_entries();
+                        let count = model.row_count();
+                        let (current_dir, in_search) = {
+                            let s = state.borrow();
+                            (s.archive_dir.clone(), !s.search_query.trim().is_empty())
+                        };
+                        for i in 0..count {
+                            if let Some(entry) = model.row_data(i) {
+                                if entry.is_selected && entry.name != ".." {
+                                    let full_path = if in_search || current_dir.is_empty() {
+                                        entry.name.to_string()
+                                    } else {
+                                        format!("{}/{}", current_dir.trim_end_matches('/'), entry.name)
+                                    };
+                                    selected_files.push(full_path);
+                                }
                             }
                         }
                     }
-                    let _ = run_in_app_extraction(p, dest, selected_files, arabic, weak.clone());
+                    let cached_pwd = state
+                        .borrow()
+                        .archive_password
+                        .as_ref()
+                        .and_then(|(ap, pwd)| if ap == &p { Some(pwd.clone()) } else { None });
+                    let _ = run_in_app_extraction(p, dest, selected_files, cached_pwd, arabic, weak.clone());
                 }
             }
         }
@@ -2709,11 +3901,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let selected = state.borrow().archive.clone()
             .or_else(|| rfd::FileDialog::new().pick_file());
         if let Some(p) = selected { if let Some(ui) = weak.upgrade() {
-            let mut pwd_opt = None;
-            match resolve_archive_password(&p, ui.get_arabic_mode()).unwrap_or(None) {
-                Some(ref s) if s == "__CANCELLED__" => return,
-                Some(pwd) => pwd_opt = Some(pwd),
-                None => {}
+            let mut pwd_opt = state
+                .borrow()
+                .archive_password
+                .as_ref()
+                .and_then(|(ap, pwd)| if ap == &p { Some(pwd.clone()) } else { None });
+            if pwd_opt.is_none() {
+                match resolve_archive_password(&p, ui.get_arabic_mode()).unwrap_or(None) {
+                    Some(ref s) if s == "__CANCELLED__" => return,
+                    Some(pwd) => pwd_opt = Some(pwd),
+                    None => {}
+                }
             }
             let mut test_args: Vec<&std::ffi::OsStr> = vec!["t".as_ref(), p.as_os_str()];
             let pwd_arg = pwd_opt.as_ref().map(|s| format!("-p{s}"));
@@ -2721,7 +3919,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 test_args.push(pa.as_ref());
             }
             match run_text_args(&test_args) {
-                Ok(_) => ui.set_status(if ui.get_arabic_mode() { "تم اختبار سلامة الأرشيف بنجاح" } else { "Archive integrity test passed" }.into()),
+                Ok(_) => ui.set_status(if ui.get_arabic_mode() { "تم اختبار سلامة الأرشيف بنجاح ✔" } else { "Archive integrity test passed ✔" }.into()),
                 Err(e) => ui.set_status(format!("Test failed: {e}").into()),
             }
         }}
@@ -2966,30 +4164,255 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let weak = ui.as_weak();
         let state = state.clone();
+        ui.on_start_rename(move || {
+            let Some(ui) = weak.upgrade() else { return; };
+            let model = ui.get_entries();
+            let mut target: Option<String> = None;
+            let sel = ui.get_selected_index();
+            if sel >= 0 && (sel as usize) < model.row_count() {
+                if let Some(e) = model.row_data(sel as usize) {
+                    if e.name != ".." {
+                        target = Some(e.name.to_string());
+                    }
+                }
+            }
+            if target.is_none() {
+                for i in 0..model.row_count() {
+                    if let Some(e) = model.row_data(i) {
+                        if e.is_selected && e.name != ".." {
+                            target = Some(e.name.to_string());
+                            break;
+                        }
+                    }
+                }
+            }
+            let Some(old_name) = target else {
+                ui.set_status(
+                    if ui.get_arabic_mode() {
+                        "يرجى تحديد ملف أو مجلد لإعادة تسميته"
+                    } else {
+                        "Select a file or folder to rename first"
+                    }
+                    .into(),
+                );
+                return;
+            };
+            let _ = &state;
+            let base_only = old_name.rsplit(['/', '\\']).next().unwrap_or(&old_name).to_string();
+            ui.set_rename_old_name(old_name.into());
+            ui.set_rename_new_name(base_only.into());
+            ui.set_show_rename(true);
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        let state = state.clone();
+        ui.on_confirm_rename(move |old_name, new_name| {
+            let Some(ui) = weak.upgrade() else { return; };
+            let new_trimmed = new_name.trim();
+            if new_trimmed.is_empty() || new_trimmed.contains('/') || new_trimmed.contains('\\') {
+                ui.set_status(
+                    if ui.get_arabic_mode() {
+                        "اسم الملف الجديد غير صالح"
+                    } else {
+                        "Invalid new name"
+                    }
+                    .into(),
+                );
+                return;
+            }
+            let arabic = ui.get_arabic_mode();
+            if let Some(archive_path) = state.borrow().archive.clone() {
+                let current_dir = state.borrow().archive_dir.clone();
+                let in_search = !state.borrow().search_query.trim().is_empty();
+                let old_full = if in_search || current_dir.is_empty() {
+                    old_name.to_string()
+                } else {
+                    format!("{}/{}", current_dir.trim_end_matches('/'), old_name)
+                };
+                let new_full = if let Some(pos) = old_full.rfind('/') {
+                    format!("{}/{}", &old_full[..pos], new_trimmed)
+                } else {
+                    new_trimmed.to_string()
+                };
+                if old_full == new_full {
+                    return;
+                }
+                let mut args = vec![
+                    std::ffi::OsString::from("rn"),
+                    std::ffi::OsString::from("-y"),
+                    archive_path.as_os_str().to_owned(),
+                    std::ffi::OsString::from(&old_full),
+                    std::ffi::OsString::from(&new_full),
+                ];
+                if let Some((_, ref pwd)) = state.borrow().archive_password {
+                    args.insert(2, std::ffi::OsString::from(format!("-p{pwd}")));
+                }
+                match run_7z(&args, None) {
+                    Ok(_) => {
+                        state.borrow_mut().archive_members = None;
+                        let _ = show_archive(&ui, &state, archive_path);
+                        ui.set_status(
+                            if arabic {
+                                format!("تمت إعادة التسمية إلى {} بنجاح ✔", new_trimmed)
+                            } else {
+                                format!("Renamed to {} successfully ✔", new_trimmed)
+                            }
+                            .into(),
+                        );
+                    }
+                    Err(e) => ui.set_status(format!("Rename error: {e}").into()),
+                }
+            } else {
+                let folder = state.borrow().folder.clone();
+                let src = folder.join(old_name.as_str());
+                let parent = src.parent().unwrap_or(&folder);
+                let dst = parent.join(new_trimmed);
+                if src == dst {
+                    return;
+                }
+                match fs::rename(&src, &dst) {
+                    Ok(()) => {
+                        let _ = show_folder(&ui, &state);
+                        ui.set_status(
+                            if arabic {
+                                format!("تمت إعادة التسمية إلى {} بنجاح ✔", new_trimmed)
+                            } else {
+                                format!("Renamed to {} successfully ✔", new_trimmed)
+                            }
+                            .into(),
+                        );
+                    }
+                    Err(e) => ui.set_status(format!("Rename error: {e}").into()),
+                }
+            }
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        let state = state.clone();
+        ui.on_copy_selected_path(move || {
+            let Some(ui) = weak.upgrade() else { return; };
+            let model = ui.get_entries();
+            let mut lines = Vec::new();
+            let is_archive = state.borrow().archive.is_some();
+            let archive_path = state.borrow().archive.clone();
+            let current_dir = state.borrow().archive_dir.clone();
+            let folder = state.borrow().folder.clone();
+
+            for i in 0..model.row_count() {
+                if let Some(e) = model.row_data(i) {
+                    if e.is_selected && e.name != ".." {
+                        if is_archive {
+                            let ap = archive_path.as_ref().unwrap().display();
+                            if current_dir.is_empty() {
+                                lines.push(format!("{}\\{}", ap, e.name));
+                            } else {
+                                lines.push(format!("{}\\{}\\{}", ap, current_dir.replace('/', "\\"), e.name));
+                            }
+                        } else {
+                            lines.push(folder.join(e.name.as_str()).display().to_string());
+                        }
+                    }
+                }
+            }
+            if lines.is_empty() {
+                lines.push(ui.get_location().to_string());
+            }
+            let joined = lines.join("\r\n");
+            if copy_text_to_clipboard(&joined) {
+                ui.set_status(
+                    if ui.get_arabic_mode() {
+                        "تم نسخ المسار إلى الحافظة ✔"
+                    } else {
+                        "Copied path to clipboard ✔"
+                    }
+                    .into(),
+                );
+            }
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        let state = state.clone();
         ui.on_show_archive_info(move || {
             if let Some(ui) = weak.upgrade() {
                 let arabic = ui.get_arabic_mode();
-                if let Some(ref archive) = state.borrow().archive {
+                let maybe_archive = state.borrow().archive.clone();
+                if let Some(archive) = maybe_archive {
                     let ext = archive.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_uppercase();
-                    let name = archive.file_name().unwrap_or_default().to_string_lossy();
-                    let meta = archive.metadata().ok();
-                    let size_str = meta.map(|m| format_size(m.len())).unwrap_or_else(|| "0".into());
-                    let tot = ui.get_total_info();
-                    let msg = if arabic {
-                        format!("معلومات الأرشيف: {} | الصيغة: {} | الحجم: {} بايت | {}", name, ext, size_str, tot)
+                    let name = archive.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    let packed_disk = archive.metadata().map(|m| m.len()).unwrap_or(0);
+                    let mut unpacked_total = 0u64;
+                    let mut files_count = 0usize;
+                    let mut dirs_count = 0usize;
+                    if let Some((_, ref mems)) = state.borrow().archive_members {
+                        for m in mems {
+                            if m.is_dir {
+                                dirs_count += 1;
+                            } else {
+                                files_count += 1;
+                                unpacked_total += m.size;
+                            }
+                        }
+                    }
+                    let ratio = if unpacked_total > 0 {
+                        ((packed_disk as f64 / unpacked_total as f64) * 100.0).min(100.0)
                     } else {
-                        format!("Archive Info: {} | Format: {} | Size: {} bytes | {}", name, ext, size_str, tot)
+                        100.0
                     };
-                    ui.set_status(msg.into());
+                    let title = if arabic {
+                        format!("معلومات الأرشيف — {}", name)
+                    } else {
+                        format!("Archive Information — {}", name)
+                    };
+                    let body = if arabic {
+                        format!(
+                            "الصيغة: {}\nالحجم على القرص (المضغوط): {} بايت\nالحجم الأصلي الكلي: {} بايت\nنسبة الضغط: {:.1}%\nعدد الملفات: {}  |  عدد المجلدات: {}\nالمسار: {}",
+                            ext,
+                            format_size(packed_disk),
+                            format_size(unpacked_total),
+                            ratio,
+                            files_count,
+                            dirs_count,
+                            archive.display()
+                        )
+                    } else {
+                        format!(
+                            "Format: {}\nPacked archive size: {} bytes\nUnpacked total size: {} bytes\nCompression ratio: {:.1}%\nFiles: {}  |  Folders: {}\nLocation: {}",
+                            ext,
+                            format_size(packed_disk),
+                            format_size(unpacked_total),
+                            ratio,
+                            files_count,
+                            dirs_count,
+                            archive.display()
+                        )
+                    };
+                    ui.set_info_dialog_title(title.into());
+                    ui.set_info_dialog_body(body.into());
+                    ui.set_show_info_dialog(true);
+                    ui.set_status(ui.get_total_info());
                 } else {
                     let folder = state.borrow().folder.clone();
-                    let total_info = ui.get_total_info();
-                    let msg = if arabic {
-                        format!("معلومات المجلد الحالي: {} | {}", folder.display(), total_info)
+                    let total_info = ui.get_total_info().to_string();
+                    let title = if arabic {
+                        "معلومات المجلد الحالي".to_string()
                     } else {
-                        format!("Current Folder: {} | {}", folder.display(), total_info)
+                        "Current Folder Information".to_string()
                     };
-                    ui.set_status(msg.into());
+                    let body = if arabic {
+                        format!("المسار الحالي:\n{}\n\nالملخص:\n{}", folder.display(), total_info)
+                    } else {
+                        format!("Current Path:\n{}\n\nSummary:\n{}", folder.display(), total_info)
+                    };
+                    ui.set_info_dialog_title(title.into());
+                    ui.set_info_dialog_body(body.into());
+                    ui.set_show_info_dialog(true);
+                    ui.set_status(total_info.into());
                 }
             }
         });
@@ -3261,14 +4684,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::supported_archive;
+    use super::{
+        cleanup_new_zero_byte_files, parse_formatted_bytes, parse_modified_sort_key,
+        snapshot_zero_byte_files, sort_file_entries, supported_archive, FileEntry,
+    };
     use std::path::Path;
 
     #[test]
     fn recognizes_supported_archive_extensions_case_insensitively() {
         assert!(supported_archive(Path::new("backup.7Z")));
         assert!(supported_archive(Path::new("backup.tar.gz")));
+        assert!(supported_archive(Path::new("system.ISO")));
+        assert!(supported_archive(Path::new("driver.cab")));
         assert!(!supported_archive(Path::new("notes.txt")));
         assert!(!supported_archive(Path::new("archive")));
+    }
+
+    #[test]
+    fn sorts_entries_preserving_parent_and_grouping_dirs_first() {
+        let mk = |name: &str, size: &str, modified: &str, is_dir: bool| FileEntry {
+            name: name.into(),
+            size: size.into(),
+            packed: "".into(),
+            entry_type: "".into(),
+            modified: modified.into(),
+            crc32: "".into(),
+            is_dir,
+            icon_kind: if is_dir { "dir".into() } else { "file".into() },
+            is_selected: false,
+        };
+        let mut list = vec![
+            mk("..", "", "", true),
+            mk("small.txt", "120", "01/05/2024 10:00", false),
+            mk("docs", "", "02/05/2024 12:00", true),
+            mk("huge.bin", "1,024,000", "03/01/2025 08:30", false),
+        ];
+        // Sort by size descending (column 1, ascending = false)
+        sort_file_entries(&mut list, 1, false);
+        assert_eq!(list[0].name.as_str(), "..");
+        assert_eq!(list[1].name.as_str(), "docs");
+        assert_eq!(list[2].name.as_str(), "huge.bin");
+        assert_eq!(list[3].name.as_str(), "small.txt");
+
+        assert_eq!(parse_formatted_bytes("1,024,000"), 1_024_000);
+        assert!(parse_modified_sort_key("03/01/2025 08:30") > parse_modified_sort_key("01/05/2024 10:00"));
+    }
+
+    #[test]
+    fn cleanup_preserves_pre_existing_zero_byte_files() {
+        let dir = std::env::temp_dir().join(format!("mickey-zero-preserve-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let user_empty = dir.join("keep_me.txt");
+        std::fs::write(&user_empty, b"").unwrap();
+
+        let snap = snapshot_zero_byte_files(&dir);
+        let partial_extract = dir.join("aborted.bin");
+        std::fs::write(&partial_extract, b"").unwrap();
+
+        cleanup_new_zero_byte_files(&dir, &snap);
+        assert!(user_empty.exists());
+        assert!(!partial_extract.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
