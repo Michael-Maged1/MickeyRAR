@@ -57,6 +57,10 @@ slint! {
     }
 }
 
+const ARCHIVE_EXTENSIONS: [&str; 14] = [
+    ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".iso", ".cab", ".wim", ".tgz", ".tbz2", ".txz", ".z",
+];
+
 const PROGRAM_BYTES: &[u8] = include_bytes!("../target/release/mickey-rar.exe");
 const SEVEN_ZIP_BYTES: &[u8] = include_bytes!("runtime/7z.exe");
 const SEVEN_ZIP_DLL_BYTES: &[u8] = include_bytes!("runtime/7z.dll");
@@ -72,10 +76,59 @@ fn registry_value(key: &str, name: &str, value: &str) {
     let _ = command.args(["/t", "REG_SZ", "/d", value, "/f"]).status();
 }
 
+fn registry_dword(key: &str, name: &str, value: u32) {
+    let mut command = Command::new("reg.exe");
+    command.creation_flags(CREATE_NO_WINDOW);
+    let _ = command
+        .args(["ADD", key, "/v", name, "/t", "REG_DWORD", "/d", &value.to_string(), "/f"])
+        .status();
+}
+
 fn registry_delete(key: &str) {
     let mut command = Command::new("reg.exe");
     command.creation_flags(CREATE_NO_WINDOW);
     let _ = command.args(["DELETE", key, "/f"]).status();
+}
+
+fn registry_delete_value(key: &str, name: &str) {
+    let mut command = Command::new("reg.exe");
+    command.creation_flags(CREATE_NO_WINDOW);
+    let _ = command.args(["DELETE", key, "/v", name, "/f"]).status();
+}
+
+/// Downloads carry the mark-of-the-web and Windows then asks "Do you want to
+/// open this file?" before launching the archiver. Adding our extensions to the
+/// per-user low-risk list removes that prompt for archives only, and the list
+/// is merged so an existing policy is preserved.
+fn trust_archive_file_types(extensions: &[&str]) {
+    let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Associations";
+    let existing = {
+        let mut command = Command::new("reg.exe");
+        command.creation_flags(CREATE_NO_WINDOW);
+        match command.args(["QUERY", key, "/v", "LowRiskFileTypes"]).output() {
+            Ok(out) if out.status.success() => {
+                let text = String::from_utf8_lossy(&out.stdout).to_string();
+                text.split("REG_SZ").nth(1).unwrap_or("").trim().to_string()
+            }
+            _ => String::new(),
+        }
+    };
+
+    let mut list: Vec<String> = existing
+        .split(';')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let mut added = false;
+    for ext in extensions {
+        if !list.iter().any(|e| e.eq_ignore_ascii_case(ext)) {
+            list.push((*ext).to_string());
+            added = true;
+        }
+    }
+    if added {
+        registry_value(key, "LowRiskFileTypes", &list.join(";"));
+    }
 }
 
 fn is_elevated() -> bool {
@@ -96,6 +149,12 @@ fn relaunch_as_admin() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn register_context_menu(executable: &PathBuf) {
+    // Clean up the machine-wide capability record written by older installers.
+    // The current installer registers capabilities only under HKCU, preventing
+    // duplicate rows for Mickey RAR in Windows 11's Default apps page.
+    registry_delete(r"HKLM\Software\MickeyRAR\Capabilities");
+    registry_delete_value(r"HKLM\Software\RegisteredApplications", "MickeyRAR");
+
     for old_key in [
         r"HKCU\Software\Classes\*\shell\MickeyRAR",
         r"HKCU\Software\Classes\Directory\shell\MickeyRAR",
@@ -108,7 +167,14 @@ fn register_context_menu(executable: &PathBuf) {
         r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\CommandStore\shell\MickeyRAR.ExtractTo",
     ] { registry_delete(old_key); }
     let command_store = r"HKLM\Software\Microsoft\Windows\CurrentVersion\Explorer\CommandStore\shell";
-    let executable = executable.display().to_string();
+    let executable_str = executable.display().to_string();
+    let install_dir = executable.parent().unwrap_or(std::path::Path::new("."));
+    let icon_file = install_dir.join("icon.ico");
+    let icon_val = if icon_file.is_file() {
+        format!("\"{}\"", icon_file.display())
+    } else {
+        format!("\"{executable_str}\",0")
+    };
     let commands = [
         ("MickeyRAR.Open", "Open with Mickey RAR (فتح باستخدام Mickey RAR)", ""),
         ("MickeyRAR.ExtractHere", "Extract Here (فك الضغط هنا)", "--extract-here"),
@@ -122,11 +188,11 @@ fn register_context_menu(executable: &PathBuf) {
         let verb_key = format!(r"{command_store}\{verb}");
         let command_key = format!(r"{verb_key}\command");
         registry_value(&verb_key, "", label);
-        registry_value(&verb_key, "Icon", &format!("\"{executable}\",0"));
+        registry_value(&verb_key, "Icon", &icon_val);
         let cmd = if flag.is_empty() {
-            format!("\"{executable}\" \"%1\"")
+            format!("\"{executable_str}\" \"%1\"")
         } else {
-            format!("\"{executable}\" {flag} \"%1\"")
+            format!("\"{executable_str}\" {flag} \"%1\"")
         };
         registry_value(&command_key, "", &cmd);
     }
@@ -138,40 +204,53 @@ fn register_context_menu(executable: &PathBuf) {
     ] {
         registry_value(target, "MUIVerb", "Mickey RAR");
         registry_value(target, "SubCommands", "MickeyRAR.Open;MickeyRAR.ExtractHere;MickeyRAR.ExtractToFolder;MickeyRAR.ExtractTo;MickeyRAR.Add;MickeyRAR.Compress;MickeyRAR.Email");
-        registry_value(target, "Icon", &format!("\"{executable}\",0"));
+        registry_value(target, "Icon", &icon_val);
     }
 
-    let extensions = [
-        ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".iso", ".cab", ".wim", ".tgz", ".tbz2", ".txz",
-    ];
+    let extensions = ARCHIVE_EXTENSIONS;
 
     for base in [r"HKLM\Software\Classes", r"HKCU\Software\Classes"] {
         let prog_id = format!(r"{base}\MickeyRAR.Archive");
         registry_value(&prog_id, "", "Mickey RAR Archive");
-        registry_value(&format!(r"{prog_id}\DefaultIcon"), "", &format!("\"{executable}\",0"));
+        registry_value(&prog_id, "FriendlyTypeName", "Mickey RAR Archive");
+        // FTA_OpenIsSafe (0x00010000) prevents Windows "Open File - Security Warning" prompts for archives
+        registry_dword(&prog_id, "EditFlags", 0x00010000);
+        registry_value(&format!(r"{prog_id}\DefaultIcon"), "", &icon_val);
+        registry_value(&format!(r"{prog_id}\Application"), "ApplicationName", "Mickey RAR");
+        registry_value(&format!(r"{prog_id}\Application"), "ApplicationDescription", "Mickey RAR classic archive manager");
+        registry_value(&format!(r"{prog_id}\Application"), "ApplicationIcon", &icon_val);
         registry_value(&format!(r"{prog_id}\shell"), "", "open");
+        registry_value(&format!(r"{prog_id}\shell\open"), "", "Open with Mickey RAR");
         registry_value(&format!(r"{prog_id}\shell\open"), "FriendlyAppName", "Mickey RAR");
-        registry_value(&format!(r"{prog_id}\shell\open\command"), "", &format!("\"{executable}\" \"%1\""));
+        registry_value(&format!(r"{prog_id}\shell\open"), "Icon", &icon_val);
+        registry_value(&format!(r"{prog_id}\shell\open\command"), "", &format!("\"{executable_str}\" \"%1\""));
 
         for ext in &extensions {
             let ext_key = format!(r"{base}\{ext}");
-            registry_value(&ext_key, "", "MickeyRAR.Archive");
+            // Register as a handler without replacing the user's existing
+            // default app. Windows protects that choice with UserChoice.
             let ext_open = format!(r"{ext_key}\OpenWithProgids");
             registry_value(&ext_open, "MickeyRAR.Archive", "");
         }
     }
 
-    // Clear broken/orphaned UserChoice in FileExts so Windows falls back to our ProgID
+    // Advertise the app to Explorer. Do not delete UserChoice: Windows owns
+    // and hashes it, and the user must make the default-app choice themselves.
     for ext in &extensions {
-        registry_delete(&format!(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\UserChoice"));
-        registry_delete(&format!(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\UserChoiceLatest"));
+        registry_value(
+            &format!(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\OpenWithProgids"),
+            "MickeyRAR.Archive",
+            "",
+        );
     }
 
-    // Register Capabilities for Windows 10/11 Default Apps
-    for base in [r"HKLM\Software", r"HKCU\Software"] {
+    // Register Capabilities once per user. Registering the same name under
+    // both HKLM and HKCU makes Windows 11 display duplicate Mickey RAR rows.
+    for base in [r"HKCU\Software"] {
         let cap = format!(r"{base}\MickeyRAR\Capabilities");
         registry_value(&cap, "ApplicationName", "Mickey RAR");
-        registry_value(&cap, "ApplicationDescription", "Mickey RAR archive manager");
+        registry_value(&cap, "ApplicationDescription", "Mickey RAR classic archive manager");
+        registry_value(&cap, "ApplicationIcon", &icon_val);
         for ext in &extensions {
             registry_value(&format!(r"{cap}\FileAssociations"), ext, "MickeyRAR.Archive");
         }
@@ -182,19 +261,25 @@ fn register_context_menu(executable: &PathBuf) {
     for base in [r"HKLM\Software\Classes\Applications", r"HKCU\Software\Classes\Applications"] {
         let app_entry = format!(r"{base}\mickey-rar.exe");
         registry_value(&app_entry, "FriendlyAppName", "Mickey RAR");
-        registry_value(&format!(r"{app_entry}\DefaultIcon"), "", &format!("\"{executable}\",0"));
-        registry_value(&format!(r"{app_entry}\shell\open\command"), "", &format!("\"{executable}\" \"%1\""));
+        registry_dword(&app_entry, "EditFlags", 0x00010000);
+        registry_value(&format!(r"{app_entry}\DefaultIcon"), "", &icon_val);
+        registry_value(&format!(r"{app_entry}\shell\open"), "FriendlyAppName", "Mickey RAR");
+        registry_value(&format!(r"{app_entry}\shell\open\command"), "", &format!("\"{executable_str}\" \"%1\""));
         for ext in &extensions {
             registry_value(&format!(r"{app_entry}\SupportedTypes"), ext, "");
         }
     }
 
     // App Paths
-    let app_paths = r"HKLM\Software\Microsoft\Windows\CurrentVersion\App Paths\mickey-rar.exe";
-    registry_value(app_paths, "", &executable);
-    if let Some(parent) = std::path::Path::new(&executable).parent() {
-        registry_value(app_paths, "Path", &parent.display().to_string());
+    for base in [r"HKLM\Software", r"HKCU\Software"] {
+        let app_paths = format!(r"{base}\Microsoft\Windows\CurrentVersion\App Paths\mickey-rar.exe");
+        registry_value(&app_paths, "", &executable_str);
+        if let Some(parent) = std::path::Path::new(&executable).parent() {
+            registry_value(&app_paths, "Path", &parent.display().to_string());
+        }
     }
+
+    trust_archive_file_types(&extensions);
 
     #[cfg(windows)]
     unsafe {
@@ -237,6 +322,28 @@ fn create_desktop_shortcut(executable: &PathBuf) {
     let _ = powershell.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &command]).status();
 }
 
+fn notify_association_change() {
+    unsafe {
+        windows_sys::Win32::UI::Shell::SHChangeNotify(
+            windows_sys::Win32::UI::Shell::SHCNE_ASSOCCHANGED as i32,
+            windows_sys::Win32::UI::Shell::SHCNF_IDLIST,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+    }
+}
+
+fn apply_archive_associations() {
+    for ext in &ARCHIVE_EXTENSIONS {
+        for base in [r"HKLM\Software\Classes", r"HKCU\Software\Classes"] {
+            let ext_key = format!(r"{base}\{ext}");
+            registry_value(&ext_key, "", "MickeyRAR.Archive");
+            registry_value(&format!(r"{ext_key}\OpenWithProgids"), "MickeyRAR.Archive", "");
+        }
+    }
+    notify_association_change();
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !is_elevated() {
         relaunch_as_admin()?;
@@ -253,8 +360,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let progress_state = progress.clone();
     let ui_weak = ui.as_weak();
     let timer = Timer::default();
+    let installed = Rc::new(std::cell::Cell::new(false));
 
     timer.start(TimerMode::Repeated, Duration::from_millis(120), move || {
+        if installed.get() { return; }
         let Some(ui) = ui_weak.upgrade() else { return; };
         let mut value = progress_state.borrow_mut();
         *value = (*value + 0.12).min(1.0);
@@ -298,20 +407,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
         register_context_menu(&executable);
+        apply_archive_associations();
         register_uninstall(&install_dir, &executable, &uninstaller);
         create_desktop_shortcut(&executable);
+        notify_association_change();
+        installed.set(true);
 
-        #[cfg(windows)]
-        unsafe {
-            windows_sys::Win32::UI::Shell::SHChangeNotify(
-                windows_sys::Win32::UI::Shell::SHCNE_ASSOCCHANGED as i32,
-                windows_sys::Win32::UI::Shell::SHCNF_IDLIST,
-                std::ptr::null(),
-                std::ptr::null(),
-            );
-        }
-
+        // Silent finish: launch Mickey RAR and close installer cleanly
         let _ = Command::new(&executable).spawn();
+        std::thread::sleep(Duration::from_millis(250));
         std::process::exit(0);
     });
 

@@ -47,7 +47,28 @@ pub fn install() {
             if !small.is_null() {
                 SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, small as isize);
             }
+            apply_dark_caption(hwnd);
         }
+    }
+}
+
+/// Draw the native caption in dark mode so the title bar matches the near-black
+/// client area instead of staying bright white.
+#[cfg(windows)]
+unsafe fn apply_dark_caption(hwnd: windows_sys::Win32::Foundation::HWND) {
+    #[link(name = "dwmapi")]
+    unsafe extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: windows_sys::Win32::Foundation::HWND,
+            attribute: u32,
+            value: *const i32,
+            size: u32,
+        ) -> i32;
+    }
+    // 20 on current Windows builds, 19 on Windows 10 1809-1909.
+    let enabled: i32 = 1;
+    if DwmSetWindowAttribute(hwnd, 20, &enabled, 4) != 0 {
+        let _ = DwmSetWindowAttribute(hwnd, 19, &enabled, 4);
     }
 }
 

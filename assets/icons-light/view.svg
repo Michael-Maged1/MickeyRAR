@@ -1,14 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <!-- Person Head -->
-  <circle cx="29" cy="14" r="5.5"
-          fill="none" stroke="#2b2d30" stroke-width="2.3" stroke-linecap="round" />
-  <!-- Person Shoulders -->
-  <path d="M 21 28 C 21 22.8 24.2 21 29 21 C 33.8 21 37 22.8 37 28"
-        fill="none" stroke="#2b2d30" stroke-width="2.3" stroke-linecap="round" />
-  <!-- Magnifying Glass Lens in front -->
-  <circle cx="17.5" cy="27.5" r="6.5"
-          fill="#f8fafc" stroke="#d44a33" stroke-width="2.4" />
-  <!-- Magnifying Glass Handle -->
-  <line x1="13" y1="32" x2="8" y2="37"
-        stroke="#d44a33" stroke-width="2.6" stroke-linecap="round" />
+  <circle cx="27" cy="15.5" r="6" fill="#4a4a4a"/>
+  <path d="M17 37.5c0-6.3 4.5-10.3 10-10.3s10 4 10 10.3Z" fill="#4a4a4a"/>
+  <circle cx="16.5" cy="29.5" r="7" fill="none" stroke="#b07d12" stroke-width="2.6"/>
+  <path d="M11.4 34.6L6.8 39.2" stroke="#b07d12" stroke-width="3.2" stroke-linecap="round"/>
 </svg>

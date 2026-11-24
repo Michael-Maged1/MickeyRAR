@@ -1,8 +1,5 @@
-﻿<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <!-- Lens -->
-  <circle cx="21" cy="20" r="10.5"
-          fill="none" stroke="#2b2d30" stroke-width="2.4" />
-  <!-- Handle -->
-  <line x1="28.5" y1="27.5" x2="39" y2="38"
-        stroke="#2b2d30" stroke-width="2.6" stroke-linecap="round" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <circle cx="21" cy="21" r="11.5" fill="none" stroke="#4a4a4a" stroke-width="2.9"/>
+  <path d="M29.5 29.5L38.5 38.5" stroke="#4a4a4a" stroke-width="3.4" stroke-linecap="round"/>
+  <path d="M15 17.5a7.2 7.2 0 0 1 4.2-3.7" fill="none" stroke="#b07d12" stroke-width="2.4" stroke-linecap="round"/>
 </svg>

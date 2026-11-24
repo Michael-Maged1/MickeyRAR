@@ -5,6 +5,8 @@ use std::os::windows::process::CommandExt;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(windows)]
+const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x00004000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompressionSettings {
@@ -214,7 +216,7 @@ pub fn run_7z(args: &[OsString], cwd: Option<&Path>) -> Result<String, String> {
     for executable in executables {
         let mut cmd = Command::new(&executable);
         #[cfg(windows)]
-        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
         cmd.args(args);
         if let Some(dir) = cwd { cmd.current_dir(dir); }
         match cmd.output() {
@@ -315,7 +317,7 @@ pub fn run_7z_cancellable_with_progress(
             command.arg("-mmt=on").arg("-sccUTF-8").args(args).stdout(Stdio::null()).stderr(Stdio::piped());
         }
         #[cfg(windows)]
-        command.creation_flags(CREATE_NO_WINDOW);
+        command.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
         if let Some(dir) = cwd { command.current_dir(dir); }
         let mut child = match command.spawn() {
             Ok(child) => child,
@@ -482,7 +484,7 @@ pub fn inspect_archive_encryption(archive: &Path) -> ArchiveEncryptionInfo {
         let mut cmd = Command::new(&executable);
         cmd.stdin(Stdio::null());
         #[cfg(windows)]
-        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
         cmd.args(["l", "-slt", "-sccUTF-8", "-p"]).arg(archive);
         if let Ok(output) = cmd.output() {
             let stdout = String::from_utf8_lossy(&output.stdout);

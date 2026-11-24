@@ -1,10 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <!-- Folder Outline -->
-  <path d="M 8 16 C 8 13.5 9.5 12 11.5 12 L 18 12 C 19.5 12 21 13 22 14.5 L 23.5 16.5 L 38.5 16.5 C 40.5 16.5 42 18 42 20 L 42 34 C 42 36 40.5 37.5 38.5 37.5 L 9.5 37.5 C 7.5 37.5 6 36 6 34 L 6 18 C 6 16.5 7 16 8 16 Z"
-        fill="none" stroke="#e0e0e0" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" />
-  <!-- Circular Badge at bottom right -->
-  <circle cx="34" cy="30" r="7.5" fill="#e8573f" stroke="#181818" stroke-width="1.8" />
-  <!-- Plus Sign -->
-  <line x1="34" y1="26" x2="34" y2="34" stroke="#141414" stroke-width="2.2" stroke-linecap="round" />
-  <line x1="30" y1="30" x2="38" y2="30" stroke="#141414" stroke-width="2.2" stroke-linecap="round" />
+  <rect x="6.5" y="12.5" width="35" height="28.5" rx="3.5" fill="none" stroke="#d9d9d9" stroke-width="2.6"/>
+  <path d="M6.5 20.5h35" stroke="#d9d9d9" stroke-width="2.2"/>
+  <path d="M18.5 20.5h9v20.5h-9Z" fill="none" stroke="#a3a3a3" stroke-width="1.6"/>
+  <path d="M18.5 24.5h9M18.5 28.5h9M18.5 32.5h9" stroke="#a3a3a3" stroke-width="1.4"/>
+  <circle cx="35" cy="34.5" r="7.8" fill="#e3b548"/>
+  <path d="M35 30.5v8M31 34.5h8" stroke="#2b2b2b" stroke-width="2.4" stroke-linecap="round"/>
 </svg>
