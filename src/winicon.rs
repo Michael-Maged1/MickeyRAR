@@ -1,4 +1,4 @@
-//! Full-size window icons.
+//! Full-size window icons and native Windows title bar theme synchronization.
 //!
 //! Slint's `icon` window property only sets the *small* icon on Windows, so the
 //! Alt+Tab switcher and some shell previews still fall back to the generic
@@ -6,13 +6,10 @@
 //! applies it as both the small and the large icon of every visible window.
 
 #[cfg(windows)]
-pub fn install() {
-    use std::os::windows::ffi::OsStrExt;
+fn collect_process_windows() -> Vec<windows_sys::Win32::Foundation::HWND> {
     use windows_sys::Win32::Foundation::{HWND, LPARAM};
-    use windows_sys::Win32::UI::Shell::ExtractIconExW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowTextLengthW, GetWindowThreadProcessId, IsWindowVisible,
-        SendMessageW, ICON_BIG, ICON_SMALL, WM_SETICON,
     };
 
     struct Collector {
@@ -30,6 +27,25 @@ pub fn install() {
         1
     }
 
+    let mut collector = Collector { pid: std::process::id(), windows: Vec::new() };
+    unsafe { EnumWindows(Some(collect), &mut collector as *mut Collector as LPARAM) };
+    collector.windows
+}
+
+#[cfg(windows)]
+pub fn install() {
+    install_with_theme(true);
+}
+
+#[cfg(windows)]
+#[allow(dead_code)]
+pub fn install_with_theme(dark: bool) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::ExtractIconExW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SendMessageW, ICON_BIG, ICON_SMALL, WM_SETICON,
+    };
+
     let Ok(exe) = std::env::current_exe() else { return };
     let exe_wide: Vec<u16> = exe.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
     let mut large: *mut std::ffi::c_void = std::ptr::null_mut();
@@ -37,9 +53,7 @@ pub fn install() {
     let found = unsafe { ExtractIconExW(exe_wide.as_ptr(), 0, &mut large, &mut small, 1) };
     if found == 0 || large.is_null() { return; }
 
-    let mut collector = Collector { pid: std::process::id(), windows: Vec::new() };
-    unsafe { EnumWindows(Some(collect), &mut collector as *mut Collector as LPARAM) };
-    for hwnd in collector.windows {
+    for hwnd in collect_process_windows() {
         unsafe {
             // Deliberately not destroyed: Windows keeps using these handles for
             // the window caption, the taskbar button and Alt+Tab.
@@ -47,15 +61,25 @@ pub fn install() {
             if !small.is_null() {
                 SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, small as isize);
             }
-            apply_dark_caption(hwnd);
+            apply_caption_theme(hwnd, dark);
         }
     }
 }
 
-/// Draw the native caption in dark mode so the title bar matches the near-black
-/// client area instead of staying bright white.
+/// Update the native Windows title bar between dark and light mode live.
 #[cfg(windows)]
-unsafe fn apply_dark_caption(hwnd: windows_sys::Win32::Foundation::HWND) {
+#[allow(dead_code)]
+pub fn set_dark_caption(dark: bool) {
+    for hwnd in collect_process_windows() {
+        unsafe {
+            apply_caption_theme(hwnd, dark);
+        }
+    }
+}
+
+/// Draw the native caption in dark or light mode to match the app's active theme.
+#[cfg(windows)]
+unsafe fn apply_caption_theme(hwnd: windows_sys::Win32::Foundation::HWND, dark: bool) {
     #[link(name = "dwmapi")]
     unsafe extern "system" {
         fn DwmSetWindowAttribute(
@@ -66,7 +90,7 @@ unsafe fn apply_dark_caption(hwnd: windows_sys::Win32::Foundation::HWND) {
         ) -> i32;
     }
     // 20 on current Windows builds, 19 on Windows 10 1809-1909.
-    let enabled: i32 = 1;
+    let enabled: i32 = if dark { 1 } else { 0 };
     if DwmSetWindowAttribute(hwnd, 20, &enabled, 4) != 0 {
         let _ = DwmSetWindowAttribute(hwnd, 19, &enabled, 4);
     }
@@ -74,3 +98,11 @@ unsafe fn apply_dark_caption(hwnd: windows_sys::Win32::Foundation::HWND) {
 
 #[cfg(not(windows))]
 pub fn install() {}
+
+#[cfg(not(windows))]
+#[allow(dead_code)]
+pub fn install_with_theme(_dark: bool) {}
+
+#[cfg(not(windows))]
+#[allow(dead_code)]
+pub fn set_dark_caption(_dark: bool) {}

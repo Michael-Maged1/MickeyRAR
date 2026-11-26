@@ -68,7 +68,9 @@ jobs:
           VERSION="v$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
           echo "Publishing release $VERSION..."
           ASSETS=("MickeyRAR-macOS.dmg")
-          if [ -f "installer/MickeyRAR-Setup.exe" ]; then
+          if [ -f "installer/MickeyRAR-Setup-${VERSION}.exe" ]; then
+            ASSETS+=("installer/MickeyRAR-Setup-${VERSION}.exe")
+          elif [ -f "installer/MickeyRAR-Setup.exe" ]; then
             ASSETS+=("installer/MickeyRAR-Setup.exe")
           fi
           if gh release view "$VERSION" >/dev/null 2>&1; then

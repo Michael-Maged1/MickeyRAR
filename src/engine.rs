@@ -313,8 +313,15 @@ pub fn run_7z_cancellable_with_progress(
                 .arg("-sccUTF-8")
                 .args(&args[1..]);
             command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        } else if !args.is_empty() {
+            command.arg(&args[0])
+                .arg("-mmt=on")
+                .arg("-sccUTF-8")
+                .args(&args[1..])
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped());
         } else {
-            command.arg("-mmt=on").arg("-sccUTF-8").args(args).stdout(Stdio::null()).stderr(Stdio::piped());
+            command.args(args).stdout(Stdio::null()).stderr(Stdio::piped());
         }
         #[cfg(windows)]
         command.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);

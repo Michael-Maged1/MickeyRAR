@@ -505,9 +505,387 @@ slint::slint! {
             }
         }
     }
+
+    export component OverwriteDialog inherits Window {
+        title: root.rtl ? "Mickey RAR — تأكيد استبدال الملفات" : "Mickey RAR — Confirm File Replace";
+        icon: @image-url("../assets/icon-window.png");
+        width: 500px;
+        height: 270px;
+        background: #171717;
+        in-out property <bool> rtl: false;
+        in-out property <string> headline: "";
+        in-out property <string> details: "";
+        callback replace-all();
+        callback skip-existing();
+        callback auto-rename();
+        callback cancel();
+
+        VerticalBox {
+            padding: 18px;
+            spacing: 10px;
+
+            HorizontalBox {
+                spacing: 12px;
+                alignment: start;
+                Rectangle {
+                    width: 34px;
+                    height: 34px;
+                    border-radius: 7px;
+                    background: #e8573f;
+                    Image { source: @image-url("../assets/icon.png"); width: 34px; height: 34px; image-fit: contain; }
+                }
+                VerticalBox {
+                    padding: 0px;
+                    spacing: 2px;
+                    Text {
+                        text: root.rtl ? "الملفات موجودة بالفعل في مجلد الوجهة" : "Files Already Exist in Destination";
+                        color: #f3f7f1;
+                        font-size: 15px;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: root.headline;
+                        color: #e8573f;
+                        font-size: 12px;
+                        font-weight: 600;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            Rectangle {
+                border-width: 1px;
+                border-color: #303030;
+                border-radius: 4px;
+                background: #111111;
+                vertical-stretch: 1;
+                Text {
+                    x: 10px;
+                    y: 8px;
+                    width: parent.width - 20px;
+                    height: parent.height - 16px;
+                    text: root.details;
+                    color: #cccccc;
+                    font-size: 11.5px;
+                    wrap: word-wrap;
+                }
+            }
+
+            HorizontalBox {
+                alignment: end;
+                spacing: 8px;
+                Button {
+                    text: root.rtl ? "استبدال الكل" : "Replace All";
+                    clicked => { root.replace-all(); }
+                }
+                Button {
+                    text: root.rtl ? "تخطي الموجود" : "Skip Existing";
+                    clicked => { root.skip-existing(); }
+                }
+                Button {
+                    text: root.rtl ? "إعادة تسمية" : "Rename";
+                    clicked => { root.auto-rename(); }
+                }
+                Button {
+                    text: root.rtl ? "إلغاء" : "Cancel";
+                    clicked => { root.cancel(); }
+                }
+            }
+        }
+    }
 }
 
 type CompressionWindow = ProgressWindow;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OverwriteChoice {
+    ReplaceAll,
+    SkipExisting,
+    AutoRename,
+    Cancel,
+}
+
+impl OverwriteChoice {
+    fn as_7z_flag(self) -> &'static str {
+        match self {
+            OverwriteChoice::ReplaceAll => "-aoa",
+            OverwriteChoice::SkipExisting => "-aos",
+            OverwriteChoice::AutoRename => "-aou",
+            OverwriteChoice::Cancel => "-aoa",
+        }
+    }
+}
+
+fn format_conflict_messages(count: usize, samples: &[String], arabic: bool) -> (String, String) {
+    let headline = if arabic {
+        format!("يوجد {count} ملف تم استخراجه مسبقاً في نفس المسار.")
+    } else {
+        format!("{count} file(s) already exist in the destination folder.")
+    };
+    let mut lines: Vec<String> = samples.iter().take(5).map(|s| format!("• {s}")).collect();
+    if count > lines.len() {
+        let more = count - lines.len();
+        lines.push(if arabic {
+            format!("... و {more} ملفات أخرى")
+        } else {
+            format!("... and {more} more file(s)")
+        });
+    }
+    let hint = if arabic {
+        "\nاختر: استبدال الكل، أو تخطي الموجود، أو إعادة التسمية للاحتفاظ بالنسختين."
+    } else {
+        "\nChoose: Replace All, Skip Existing, or Rename to keep both."
+    };
+    (headline, format!("{}{}", lines.join("\n"), hint))
+}
+
+fn detect_extraction_conflicts(
+    archive: &Path,
+    dest: &Path,
+    selected_files: &[String],
+) -> (usize, Vec<String>) {
+    if !dest.exists() {
+        return (0, Vec::new());
+    }
+    let Ok(members) = list_archive_members(archive) else {
+        return (0, Vec::new());
+    };
+    let normalized_sel: Vec<String> = selected_files
+        .iter()
+        .map(|s| s.replace('\\', "/").trim_end_matches("/*").trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let mut total = 0usize;
+    let mut samples = Vec::new();
+    for m in members {
+        if m.is_dir {
+            continue;
+        }
+        let norm_path = m.path.replace('\\', "/");
+        if !normalized_sel.is_empty() {
+            let matches_sel = normalized_sel.iter().any(|sel| {
+                norm_path == *sel || norm_path.starts_with(&format!("{sel}/"))
+            });
+            if !matches_sel {
+                continue;
+            }
+        }
+        let target = dest.join(norm_path.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if target.exists() {
+            total += 1;
+            if samples.len() < 5 {
+                samples.push(norm_path);
+            }
+        }
+    }
+    (total, samples)
+}
+
+fn prompt_overwrite_blocking(
+    count: usize,
+    samples: &[String],
+    arabic: bool,
+) -> OverwriteChoice {
+    if count == 0 {
+        return OverwriteChoice::ReplaceAll;
+    }
+    let Ok(dialog) = OverwriteDialog::new() else {
+        return OverwriteChoice::ReplaceAll;
+    };
+    let (headline, details) = format_conflict_messages(count, samples, arabic);
+    dialog.set_rtl(arabic);
+    dialog.set_headline(headline.into());
+    dialog.set_details(details.into());
+    center_window(&dialog.window());
+
+    let choice = Rc::new(Cell::new(OverwriteChoice::Cancel));
+    {
+        let c = choice.clone();
+        let w = dialog.as_weak();
+        dialog.on_replace_all(move || {
+            c.set(OverwriteChoice::ReplaceAll);
+            if let Some(d) = w.upgrade() { let _ = d.hide(); }
+        });
+    }
+    {
+        let c = choice.clone();
+        let w = dialog.as_weak();
+        dialog.on_skip_existing(move || {
+            c.set(OverwriteChoice::SkipExisting);
+            if let Some(d) = w.upgrade() { let _ = d.hide(); }
+        });
+    }
+    {
+        let c = choice.clone();
+        let w = dialog.as_weak();
+        dialog.on_auto_rename(move || {
+            c.set(OverwriteChoice::AutoRename);
+            if let Some(d) = w.upgrade() { let _ = d.hide(); }
+        });
+    }
+    {
+        let c = choice.clone();
+        let w = dialog.as_weak();
+        dialog.on_cancel(move || {
+            c.set(OverwriteChoice::Cancel);
+            if let Some(d) = w.upgrade() { let _ = d.hide(); }
+        });
+    }
+    let _ = dialog.run();
+    choice.get()
+}
+
+fn prompt_overwrite_in_app<F>(
+    count: usize,
+    samples: &[String],
+    arabic: bool,
+    on_done: F,
+) where
+    F: FnOnce(OverwriteChoice) + 'static,
+{
+    if count == 0 {
+        on_done(OverwriteChoice::ReplaceAll);
+        return;
+    }
+    let Ok(dialog) = OverwriteDialog::new() else {
+        on_done(OverwriteChoice::ReplaceAll);
+        return;
+    };
+    let (headline, details) = format_conflict_messages(count, samples, arabic);
+    dialog.set_rtl(arabic);
+    dialog.set_headline(headline.into());
+    dialog.set_details(details.into());
+    center_window(&dialog.window());
+
+    let cb: Rc<RefCell<Option<F>>> = Rc::new(RefCell::new(Some(on_done)));
+    let dialog_holder: Rc<RefCell<Option<OverwriteDialog>>> = Rc::new(RefCell::new(None));
+
+    let finish = |choice: OverwriteChoice,
+                  cb_ref: &Rc<RefCell<Option<F>>>,
+                  holder_ref: &Rc<RefCell<Option<OverwriteDialog>>>| {
+        if let Some(d) = holder_ref.borrow_mut().take() {
+            let _ = d.hide();
+        }
+        if let Some(f) = cb_ref.borrow_mut().take() {
+            f(choice);
+        }
+    };
+
+    {
+        let cb_c = cb.clone();
+        let h_c = dialog_holder.clone();
+        dialog.on_replace_all(move || finish(OverwriteChoice::ReplaceAll, &cb_c, &h_c));
+    }
+    {
+        let cb_c = cb.clone();
+        let h_c = dialog_holder.clone();
+        dialog.on_skip_existing(move || finish(OverwriteChoice::SkipExisting, &cb_c, &h_c));
+    }
+    {
+        let cb_c = cb.clone();
+        let h_c = dialog_holder.clone();
+        dialog.on_auto_rename(move || finish(OverwriteChoice::AutoRename, &cb_c, &h_c));
+    }
+    {
+        let cb_c = cb.clone();
+        let h_c = dialog_holder.clone();
+        dialog.on_cancel(move || finish(OverwriteChoice::Cancel, &cb_c, &h_c));
+    }
+    {
+        let cb_c = cb.clone();
+        let h_c = dialog_holder.clone();
+        dialog.window().on_close_requested(move || {
+            finish(OverwriteChoice::Cancel, &cb_c, &h_c);
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
+
+    let _ = dialog.show();
+    *dialog_holder.borrow_mut() = Some(dialog);
+}
+
+#[cfg(windows)]
+fn move_to_recycle_bin(path: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct ShFileOpStructW {
+        hwnd: isize,
+        wFunc: u32,
+        pFrom: *const u16,
+        pTo: *const u16,
+        fFlags: u16,
+        fAnyOperationsAborted: i32,
+        hNameMappings: *mut std::ffi::c_void,
+        lpszProgressTitle: *const u16,
+    }
+
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn SHFileOperationW(lpFileOp: *mut ShFileOpStructW) -> i32;
+    }
+
+    const FO_DELETE: u32 = 3;
+    const FOF_SILENT: u16 = 0x0004;
+    const FOF_NOCONFIRMATION: u16 = 0x0010;
+    const FOF_ALLOWUNDO: u16 = 0x0040;
+    const FOF_NOERRORUI: u16 = 0x0400;
+
+    // Double-NUL terminated wide path string required by SHFileOperationW
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    wide.push(0);
+    wide.push(0);
+
+    let mut op = ShFileOpStructW {
+        hwnd: 0,
+        wFunc: FO_DELETE,
+        pFrom: wide.as_ptr(),
+        pTo: std::ptr::null(),
+        fFlags: FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI,
+        fAnyOperationsAborted: 0,
+        hNameMappings: std::ptr::null_mut(),
+        lpszProgressTitle: std::ptr::null(),
+    };
+    unsafe { SHFileOperationW(&mut op) == 0 && op.fAnyOperationsAborted == 0 }
+}
+
+#[cfg(not(windows))]
+fn move_to_recycle_bin(path: &Path) -> bool {
+    if path.is_dir() {
+        std::fs::remove_dir_all(path).is_ok()
+    } else {
+        delete_file_with_retry(path, 5)
+    }
+}
+
+fn cleanup_stale_temp_dirs() {
+    thread::spawn(|| {
+        let base = std::env::temp_dir();
+        let max_age = Duration::from_secs(3600); // 1 hour
+        let now = std::time::SystemTime::now();
+        for folder_name in &["MickeyRAR_View", "MickeyRAR_Drag"] {
+            let dir = base.join(folder_name);
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    if let Ok(meta) = entry.metadata() {
+                        if let Ok(modified) = meta.modified() {
+                            if now.duration_since(modified).unwrap_or_default() > max_age {
+                                let p = entry.path();
+                                if p.is_dir() {
+                                    let _ = std::fs::remove_dir_all(&p);
+                                } else {
+                                    let _ = std::fs::remove_file(&p);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
 
 #[derive(Default)]
 struct AppState {
@@ -696,6 +1074,40 @@ fn run_context_extraction_with_options(
         }
     }
 
+    // Check if any destination files already exist before starting extraction
+    let mut total_conflicts = 0usize;
+    let mut conflict_samples: Vec<String> = Vec::new();
+    if password.is_none() {
+        for archive in &archives {
+            let abs_archive = if archive.is_absolute() {
+                archive.clone()
+            } else {
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(archive)
+            };
+            let dest = if let Some(ref t) = target_dir {
+                t.clone()
+            } else if extract_to_subfolder {
+                let parent = abs_archive.parent().unwrap_or_else(|| Path::new("."));
+                let stem = abs_archive.file_stem().unwrap_or_default().to_string_lossy();
+                parent.join(stem.as_ref())
+            } else {
+                abs_archive.parent().unwrap_or_else(|| Path::new(".")).to_path_buf()
+            };
+            let (cnt, samps) = detect_extraction_conflicts(&abs_archive, &dest, &[]);
+            total_conflicts += cnt;
+            for s in samps {
+                if conflict_samples.len() < 5 {
+                    conflict_samples.push(s);
+                }
+            }
+        }
+    }
+    let overwrite_choice = prompt_overwrite_blocking(total_conflicts, &conflict_samples, arabic);
+    if overwrite_choice == OverwriteChoice::Cancel {
+        return Ok(());
+    }
+    let overwrite_flag = overwrite_choice.as_7z_flag();
+
     let ui = ProgressWindow::new()?;
     quit_process_on_close(&ui.window());
     ui.set_rtl(arabic);
@@ -818,7 +1230,7 @@ fn run_context_extraction_with_options(
             let mut args = vec![
                 std::ffi::OsString::from("x"),
                 std::ffi::OsString::from("-y"),
-                std::ffi::OsString::from("-aoa"),
+                std::ffi::OsString::from(overwrite_flag),
                 std::ffi::OsString::from("-mmt=on"),
                 output_arg,
                 abs_archive.as_os_str().to_owned(),
@@ -2757,9 +3169,14 @@ fn extract_json_string_after_key(json: &str, key: &str) -> Option<String> {
 
 fn default_release_asset_url(tag_name: &str) -> String {
     let asset_name = if cfg!(target_os = "macos") {
-        "MickeyRAR-macOS.dmg"
+        "MickeyRAR-macOS.dmg".to_string()
     } else {
-        "MickeyRAR-Setup.exe"
+        let tag = if tag_name.starts_with('v') || tag_name.starts_with('V') {
+            tag_name.to_string()
+        } else {
+            format!("v{tag_name}")
+        };
+        format!("MickeyRAR-Setup-{tag}.exe")
     };
     format!("https://github.com/{GITHUB_REPO}/releases/download/{tag_name}/{asset_name}")
 }
@@ -2914,6 +3331,83 @@ fn start_in_app_extraction_with_password(
     arabic: bool,
     main_ui: slint::Weak<MainWindow>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Fast path: if destination folder doesn't exist yet, zero conflicts are possible.
+    if !dest.exists() || password.is_some() {
+        return start_in_app_extraction_with_policy(
+            archive,
+            dest,
+            selected_files,
+            password,
+            already_validated,
+            OverwriteChoice::ReplaceAll,
+            arabic,
+            main_ui,
+        );
+    }
+
+    let archive_chk = archive.clone();
+    let dest_chk = dest.clone();
+    let sel_chk = selected_files.clone();
+    let (tx, rx) = mpsc::channel::<(usize, Vec<String>)>();
+    thread::spawn(move || {
+        let _ = tx.send(detect_extraction_conflicts(&archive_chk, &dest_chk, &sel_chk));
+    });
+
+    let rx = Arc::new(Mutex::new(rx));
+    let timer_holder: Rc<RefCell<Option<Timer>>> = Rc::new(RefCell::new(None));
+    let timer_self = timer_holder.clone();
+    let timer = Timer::default();
+    let state_args = Rc::new(RefCell::new(Some((
+        archive,
+        dest,
+        selected_files,
+        password,
+        already_validated,
+        main_ui,
+    ))));
+    timer.start(TimerMode::Repeated, Duration::from_millis(25), move || {
+        let Ok((cnt, samps)) = rx.lock().unwrap().try_recv() else { return; };
+        let _ = timer_self.borrow_mut().take();
+        let Some((archive, dest, selected_files, password, already_validated, main_ui)) =
+            state_args.borrow_mut().take()
+        else {
+            return;
+        };
+        let main_ui_cancel = main_ui.clone();
+        prompt_overwrite_in_app(cnt, &samps, arabic, move |choice| {
+            if choice == OverwriteChoice::Cancel {
+                if let Some(m) = main_ui_cancel.upgrade() {
+                    m.set_status(if arabic { "تم إلغاء الاستخراج" } else { "Extraction cancelled" }.into());
+                }
+                return;
+            }
+            let _ = start_in_app_extraction_with_policy(
+                archive,
+                dest,
+                selected_files,
+                password,
+                already_validated,
+                choice,
+                arabic,
+                main_ui,
+            );
+        });
+    });
+    *timer_holder.borrow_mut() = Some(timer);
+    Ok(())
+}
+
+fn start_in_app_extraction_with_policy(
+    archive: PathBuf,
+    dest: PathBuf,
+    selected_files: Vec<String>,
+    password: Option<String>,
+    already_validated: bool,
+    overwrite_choice: OverwriteChoice,
+    arabic: bool,
+    main_ui: slint::Weak<MainWindow>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let overwrite_flag = overwrite_choice.as_7z_flag();
 
     let progress_ui = ProgressWindow::new()?;
     progress_ui.set_rtl(arabic);
@@ -2992,7 +3486,7 @@ fn start_in_app_extraction_with_password(
         let mut args = vec![
             std::ffi::OsString::from("x"),
             std::ffi::OsString::from("-y"),
-            std::ffi::OsString::from("-aoa"),
+            std::ffi::OsString::from(overwrite_flag),
             std::ffi::OsString::from("-mmt=on"),
             output_arg,
             archive_clone.as_os_str().to_owned(),
@@ -4018,9 +4512,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     quit_process_on_close(&ui.window());
     let center_timer = Timer::default();
     let center_weak = ui.as_weak();
+    cleanup_stale_temp_dirs();
     center_timer.start(TimerMode::SingleShot, Duration::from_millis(120), move || {
-        if let Some(ui) = center_weak.upgrade() { center_window(&ui.window()); }
-        winicon::install();
+        if let Some(ui) = center_weak.upgrade() {
+            center_window(&ui.window());
+            winicon::install_with_theme(ui.get_dark_mode());
+        } else {
+            winicon::install();
+        }
     });
     let language = Rc::new(RefCell::new(load_language()));
     ui.set_arabic_mode(language.borrow().is_arabic());
@@ -4054,6 +4553,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let next = !ui.get_dark_mode();
                 ui.set_dark_mode(next);
                 let _ = save_dark_mode(next);
+                winicon::set_dark_caption(next);
             }
         }
     });
@@ -4680,18 +5180,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             is_dragging.set(true);
 
             let is_archive = state.borrow().archive.is_some();
-            let mut files_to_drag: Vec<String> = Vec::new();
+            // (archive_full_path, base_name, is_dir)
+            let mut items_to_drag: Vec<(String, String, bool)> = Vec::new();
             let current_dir = state.borrow().archive_dir.clone();
             if clicked_entry.is_selected {
                 for i in 0..model.row_count() {
                     if let Some(entry) = model.row_data(i) {
                         if entry.is_selected && entry.name != ".." {
+                            let base_name = entry.name.to_string();
                             let full_path = if is_archive && !current_dir.is_empty() {
-                                format!("{}/{}", current_dir.trim_end_matches('/'), entry.name)
+                                format!("{}/{}", current_dir.trim_end_matches('/'), base_name)
                             } else {
-                                entry.name.to_string()
+                                base_name.clone()
                             };
-                            files_to_drag.push(full_path);
+                            items_to_drag.push((full_path, base_name, entry.is_dir));
                         }
                     }
                 }
@@ -4699,97 +5201,200 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 update_selection(&ui, |i, _| i == idx as usize);
                 ui.set_selected_index(idx);
             }
-            if files_to_drag.is_empty() {
+            if items_to_drag.is_empty() {
+                let base_name = clicked_entry.name.to_string();
                 let full_path = if is_archive && !current_dir.is_empty() {
-                    format!("{}/{}", current_dir.trim_end_matches('/'), clicked_entry.name)
+                    format!("{}/{}", current_dir.trim_end_matches('/'), base_name)
                 } else {
-                    clicked_entry.name.to_string()
+                    base_name.clone()
                 };
-                files_to_drag.push(full_path);
+                items_to_drag.push((full_path, base_name, clicked_entry.is_dir));
             }
 
             let arabic = ui.get_arabic_mode();
 
             if is_archive {
                 let archive_path = state.borrow().archive.clone().unwrap();
-                let temp_dir = std::env::temp_dir().join("MickeyRAR_Drag");
-                let _ = std::fs::create_dir_all(&temp_dir);
+                let drag_root = std::env::temp_dir().join("MickeyRAR_Drag");
+                let _ = std::fs::create_dir_all(&drag_root);
 
-                // Check if all requested items are already cached in temp_dir
-                let all_cached = files_to_drag.iter().all(|f| {
-                    let p = temp_dir.join(f);
-                    p.exists() && (p.is_dir() || p.metadata().map(|m| m.len() > 0).unwrap_or(false))
-                });
-
-                if all_cached {
-                    let mut drag_paths: Vec<PathBuf> = Vec::new();
-                    for f in &files_to_drag {
-                        let p = temp_dir.join(f);
-                        if p.exists() {
-                            drag_paths.push(p);
-                        }
-                    }
-                    if !drag_paths.is_empty() {
-                        let path_refs: Vec<&Path> = drag_paths.iter().map(|p| p.as_path()).collect();
-                        #[cfg(windows)]
-                        {
-                            match drag_drop::windows::start_drag_drop_files(&path_refs) {
-                                Ok(effect) => {
-                                    if effect != 0 {
-                                        ui.set_status(if arabic { "تم سحب وإفلات الملفات بنجاح ✔" } else { "Files dropped successfully ✔" }.into());
-                                    } else {
-                                        ui.set_status(if arabic { "تم إلغاء السحب والإفلات" } else { "Drag and drop cancelled" }.into());
+                // Clean up stale drag session directories (> 5 minutes old) in background
+                let cleanup_root = drag_root.clone();
+                thread::spawn(move || {
+                    if let Ok(entries) = std::fs::read_dir(&cleanup_root) {
+                        let now = std::time::SystemTime::now();
+                        for entry in entries.flatten() {
+                            if let Ok(meta) = entry.metadata() {
+                                if let Ok(modified) = meta.modified() {
+                                    if now.duration_since(modified).unwrap_or_default() > Duration::from_secs(300) {
+                                        let p = entry.path();
+                                        if p.is_dir() {
+                                            let _ = std::fs::remove_dir_all(&p);
+                                        } else {
+                                            let _ = std::fs::remove_file(&p);
+                                        }
                                     }
-                                }
-                                Err(e) => {
-                                    ui.set_status(format!("Drag drop error: {e}").into());
                                 }
                             }
                         }
                     }
+                });
+
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0);
+                let session_dir = drag_root.join(format!("drag_{}_{}", std::process::id(), stamp));
+                if std::fs::create_dir_all(&session_dir).is_err() {
                     is_dragging.set(false);
                     return;
                 }
 
-                // Not cached yet: extract asynchronously with ProgressWindow so large archives never freeze the UI!
+                // Create lightweight placeholders so Windows OLE drag starts IMMEDIATELY
+                // with zero delay and zero premature extraction.
+                let mut placeholder_paths: Vec<PathBuf> = Vec::new();
+                for (_full, base_name, is_dir) in &items_to_drag {
+                    let safe_name = Path::new(base_name)
+                        .file_name()
+                        .map(|n| n.to_os_string())
+                        .unwrap_or_else(|| std::ffi::OsString::from(base_name));
+                    let p = session_dir.join(&safe_name);
+                    let ok = if *is_dir {
+                        std::fs::create_dir_all(&p).is_ok()
+                    } else {
+                        std::fs::File::create(&p).is_ok()
+                    };
+                    if ok {
+                        placeholder_paths.push(p);
+                    }
+                }
+
+                if placeholder_paths.is_empty() {
+                    let _ = std::fs::remove_dir_all(&session_dir);
+                    is_dragging.set(false);
+                    return;
+                }
+
                 let cached_pwd = state
                     .borrow()
                     .archive_password
                     .as_ref()
                     .and_then(|(ap, pwd)| if ap == &archive_path { Some(pwd.clone()) } else { None });
-                let weak_ui = ui.as_weak();
-                let state_for_drag = state.clone();
-                let archive_for_drag = archive_path.clone();
-                let is_dragging_done = is_dragging.clone();
-                let mut selected_patterns = Vec::new();
-                for f in &files_to_drag {
-                    selected_patterns.push(f.clone());
-                    selected_patterns.push(format!("{f}/*"));
-                    selected_patterns.push(format!("{f}\\*"));
-                }
-                ui.set_status(if arabic { "جاري تجهيز الملفات للسحب والإفلات..." } else { "Extracting files for drag and drop..." }.into());
-                resolve_archive_password_in_app(archive_path, cached_pwd, arabic, move |resolved| {
-                    is_dragging_done.set(false);
-                    let Some(pwd) = resolved else { return; };
-                    if let Some(ref p) = pwd {
-                        state_for_drag.borrow_mut().archive_password = Some((archive_for_drag.clone(), p.clone()));
+                let drop_error: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+                let drop_error_cb = drop_error.clone();
+                let extracted_flag = Rc::new(Cell::new(false));
+                let extracted_flag_cb = extracted_flag.clone();
+                let session_for_drop = session_dir.clone();
+                let items_for_drop = items_to_drag.clone();
+                let archive_for_drop = archive_path.clone();
+
+                let path_refs: Vec<&Path> = placeholder_paths.iter().map(|p| p.as_path()).collect();
+                #[cfg(windows)]
+                {
+                    let on_drop: Box<dyn FnOnce() -> bool> = Box::new(move || {
+                        extracted_flag_cb.set(true);
+                        let staging_dir = session_for_drop.join(".extract_staging");
+                        if let Err(e) = std::fs::create_dir_all(&staging_dir) {
+                            *drop_error_cb.borrow_mut() = Some(format!("Cannot create staging dir: {e}"));
+                            return false;
+                        }
+
+                        let mut out_arg = std::ffi::OsString::from("-o");
+                        out_arg.push(staging_dir.as_os_str());
+                        let mut args: Vec<std::ffi::OsString> = vec![
+                            std::ffi::OsString::from("x"),
+                            std::ffi::OsString::from("-y"),
+                            std::ffi::OsString::from("-mmt=on"),
+                            std::ffi::OsString::from("-sccUTF-8"),
+                            out_arg,
+                        ];
+                        if let Some(ref pwd) = cached_pwd {
+                            args.push(std::ffi::OsString::from(format!("-p{pwd}")));
+                        } else {
+                            // Non-interactive empty password so 7z fails fast instead of hanging on stdin
+                            args.push(std::ffi::OsString::from("-p"));
+                        }
+                        args.push(archive_for_drop.as_os_str().to_owned());
+                        args.push(std::ffi::OsString::from("--"));
+                        for (full, _, is_dir) in &items_for_drop {
+                            let norm = full.replace('\\', "/");
+                            args.push(std::ffi::OsString::from(&norm));
+                            if *is_dir {
+                                args.push(std::ffi::OsString::from(format!("{norm}/*")));
+                            }
+                        }
+
+                        if let Err(e) = run_7z(&args, None) {
+                            let _ = std::fs::remove_dir_all(&staging_dir);
+                            *drop_error_cb.borrow_mut() = Some(e);
+                            return false;
+                        }
+
+                        // Atomically replace each 0-byte placeholder with the real extracted item
+                        let mut any_moved = false;
+                        for (full, base_name, is_dir) in &items_for_drop {
+                            let rel = full.replace('/', std::path::MAIN_SEPARATOR_STR);
+                            let extracted_src = staging_dir.join(&rel);
+                            let safe_name = Path::new(base_name)
+                                .file_name()
+                                .map(|n| n.to_os_string())
+                                .unwrap_or_else(|| std::ffi::OsString::from(base_name));
+                            let target_dst = session_for_drop.join(&safe_name);
+                            if extracted_src.exists() {
+                                if *is_dir {
+                                    let _ = std::fs::remove_dir_all(&target_dst);
+                                } else {
+                                    let _ = std::fs::remove_file(&target_dst);
+                                }
+                                if std::fs::rename(&extracted_src, &target_dst).is_ok() {
+                                    any_moved = true;
+                                }
+                            }
+                        }
+                        let _ = std::fs::remove_dir_all(&staging_dir);
+                        if !any_moved {
+                            *drop_error_cb.borrow_mut() = Some("Extracted item not found".into());
+                            return false;
+                        }
+                        true
+                    });
+
+                    match drag_drop::windows::start_drag_drop_deferred(&path_refs, on_drop) {
+                        Ok(effect) => {
+                            if effect != 0 {
+                                ui.set_status(if arabic { "تم سحب وإفلات الملفات بنجاح ✔" } else { "Files dropped successfully ✔" }.into());
+                            } else if let Some(err) = drop_error.borrow().as_ref() {
+                                let _ = std::fs::remove_dir_all(&session_dir);
+                                if err.contains("Wrong password") || err.contains("password") {
+                                    ui.set_status(if arabic {
+                                        "الأرشيف محمي بكلمة مرور — استخدم زر استخراج لإدخال كلمة المرور أولاً"
+                                    } else {
+                                        "Archive is password-protected — enter password via Extract first"
+                                    }.into());
+                                } else {
+                                    ui.set_status(format!("Drag extract error: {err}").into());
+                                }
+                            } else {
+                                // User cancelled drag before dropping: remove unused placeholders immediately
+                                if !extracted_flag.get() {
+                                    let _ = std::fs::remove_dir_all(&session_dir);
+                                }
+                                ui.set_status(if arabic { "تم إلغاء السحب والإفلات" } else { "Drag and drop cancelled" }.into());
+                            }
+                        }
+                        Err(e) => {
+                            let _ = std::fs::remove_dir_all(&session_dir);
+                            ui.set_status(format!("Drag drop error: {e}").into());
+                        }
                     }
-                    let _ = start_in_app_extraction_with_password(
-                        archive_for_drag,
-                        temp_dir,
-                        selected_patterns,
-                        pwd,
-                        true,
-                        arabic,
-                        weak_ui,
-                    );
-                });
+                }
+                is_dragging.set(false);
                 return;
             } else {
                 let current_dir = &state.borrow().folder;
                 let mut drag_paths: Vec<PathBuf> = Vec::new();
-                for f in &files_to_drag {
-                    let p = current_dir.join(f);
+                for (_full, base_name, _) in &items_to_drag {
+                    let p = current_dir.join(base_name);
                     if p.exists() {
                         drag_paths.push(p);
                     }
@@ -5105,6 +5710,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 }
 
+                let arabic_confirm = ui.get_arabic_mode();
+                let confirm_title = if arabic_confirm { "تأكيد الحذف" } else { "Confirm Delete" };
+                let confirm_desc = if is_archive {
+                    if arabic_confirm {
+                        format!("هل أنت متأكد من حذف {} عنصر من داخل الأرشيف؟", to_delete.len())
+                    } else {
+                        format!("Are you sure you want to delete {} item(s) from the archive?", to_delete.len())
+                    }
+                } else if arabic_confirm {
+                    format!("هل تريد نقل {} عنصر إلى سلة المحذوفات؟", to_delete.len())
+                } else {
+                    format!("Move {} selected item(s) to the Recycle Bin?", to_delete.len())
+                };
+                let confirmed = rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Warning)
+                    .set_title(confirm_title)
+                    .set_description(&confirm_desc)
+                    .set_buttons(rfd::MessageButtons::YesNo)
+                    .show();
+                if confirmed != rfd::MessageDialogResult::Yes {
+                    ui.set_status(if arabic_confirm { "تم إلغاء الحذف" } else { "Delete cancelled" }.into());
+                    return;
+                }
+
                 if is_archive {
                     let archive_path = state.borrow().archive.clone().unwrap();
                     let arabic = ui.get_arabic_mode();
@@ -5162,22 +5791,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     let folder = state.borrow().folder.clone();
                     let mut deleted_count = 0;
-                    for (name, is_dir) in &to_delete {
+                    for (name, _is_dir) in &to_delete {
                         let path = folder.join(name);
-                        let ok = if *is_dir {
-                            std::fs::remove_dir_all(&path).is_ok()
-                        } else {
-                            delete_file_with_retry(&path, 5)
-                        };
-                        if ok {
+                        if move_to_recycle_bin(&path) {
                             deleted_count += 1;
                         }
                     }
                     let _ = show_folder(&ui, &state);
                     ui.set_status(if ui.get_arabic_mode() {
-                        format!("تم حذف {} ملف/مجلد بنجاح", deleted_count).into()
+                        format!("تم نقل {} عنصر إلى سلة المحذوفات بنجاح", deleted_count).into()
                     } else {
-                        format!("Deleted {} files/folders successfully", deleted_count).into()
+                        format!("Moved {} item(s) to Recycle Bin successfully", deleted_count).into()
                     });
                 }
             }
