@@ -2872,6 +2872,7 @@ const ARCHIVE_EXTENSIONS: [&str; 14] = [
     ".txz", ".z",
 ];
 
+#[cfg(windows)]
 fn register_file_associations() -> Result<(), String> {
     use std::process::Command;
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -2981,6 +2982,11 @@ fn register_file_associations() -> Result<(), String> {
         );
     }
 
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn register_file_associations() -> Result<(), String> {
     Ok(())
 }
 
